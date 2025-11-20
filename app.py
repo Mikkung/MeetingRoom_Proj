@@ -1,23 +1,52 @@
 import streamlit as st
 import datetime
 import pandas as pd
+import hashlib
 from io import BytesIO
 
 # --- Configuration ---
+
+# 1. Mock User Database with Roles (In a real application, this would be a secure database query)
+# Test Credentials (Username / Password / Role):
+# - john.doe / p123 / user
+# - jane.smith / p456 / user
+# - admin.user / p789 / admin
+USERS_DB = {
+    "john.doe": {
+        "email": "john.doe@ise.com",
+        "hashed_password": "46f947938392150917631336c1e345f22f796245c363b8c32e079a2f64f434c4", # hash of "p123"
+        "role": "user" 
+    },
+    "jane.smith": {
+        "email": "jane.smith@ise.com",
+        "hashed_password": "e7228a8d1163462f4e8b34c26a578a05f01dd531853d858348af7dd4c4a45a6c", # hash of "p456"
+        "role": "user"
+    },
+    "admin.user": {
+        "email": "admin@ise.com",
+        "hashed_password": "95a5f78233f811568478d6b8c4c7c59573887c2b3c220265275817d23f309d94", # hash of "p789"
+        "role": "admin" # <-- ONLY ADMIN CAN EXPORT STATS
+    }
+}
+
+# 2. Room Configuration
 ROOMS = {
     "ISE_Meeting_Room_I_305_Fl1": {"capacity": 8, "has_projector": True},
     "ISE_Meeting_Room_II_Fl2": {"capacity": 20, "has_projector": True},
     "ISE_Meeting_Room_III_304/1_Fl1": {"capacity": 20, "has_projector": False}
 }
 
-# Define authorized users for simple authentication (replace with real database/auth system for production)
-AUTHORIZED_USERS = ["thanaphon.a@chula.ac.th", "jane.smith", "admin.user", "user@ise.com"] 
+# --- Utility Functions ---
 
-# --- State Initialization ---
+def hash_password(password):
+    """Generates a SHA256 hash of the input password."""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+# --- State Management and Conflict Check ---
+
 def initialize_state():
     """Initializes Streamlit session state variables."""
     if 'bookings' not in st.session_state:
-        # Structure: [{'room': str, 'date': date, 'start_time': time, 'end_time': time, 'user': str}]
         st.session_state.bookings = []
     
     if 'rooms' not in st.session_state:
@@ -25,16 +54,24 @@ def initialize_state():
         
     if 'authenticated_user' not in st.session_state:
         st.session_state.authenticated_user = None
+    
+    if 'user_role' not in st.session_state:
+        st.session_state.user_role = None
 
-# --- Core Logic: Conflict Check (Updated for flexible time) ---
 def is_time_overlap(start1, end1, start2, end2):
-    """
-    Checks if two time ranges overlap.
-    A conflict occurs if (Start1 < End2) AND (End1 > Start2).
-    We use strict inequality for overlapping ranges, meaning a booking ending at 10:00 
-    and a new one starting at 10:00 do NOT conflict.
-    """
-    return start1 < end2 and end1 > start2
+    """Checks if two time ranges overlap. Times are datetime.time objects."""
+    # Convert to seconds since midnight for robust comparison
+    def time_to_seconds(t):
+        # Handle cases where t might be None if widget is empty, though st.time_input prevents this
+        if t is None: return -1 
+        return t.hour * 3600 + t.minute * 60 + t.second
+    
+    s1, e1 = time_to_seconds(start1), time_to_seconds(end1)
+    s2, e2 = time_to_seconds(start2), time_to_seconds(end2)
+    
+    # Non-overlap condition: (End1 <= Start2) OR (Start1 >= End2)
+    # Overlap is the negation: NOT ((End1 <= Start2) OR (Start1 >= End2))
+    return not (e1 <= s2 or s1 >= e2)
 
 def is_conflict(new_booking):
     """Checks if a new booking conflicts with any existing booking."""
@@ -44,10 +81,7 @@ def is_conflict(new_booking):
     new_end = new_booking['end_time']
 
     for booking in st.session_state.bookings:
-        # 1. Check if the room and date match
         if booking['room'] == new_room and booking['date'] == new_date:
-            
-            # 2. Check for time overlap
             existing_start = booking['start_time']
             existing_end = booking['end_time']
             
@@ -56,72 +90,87 @@ def is_conflict(new_booking):
     return False
 
 # --- Callback function for Form Submission ---
-def handle_booking_submission(user_name, room_name, booking_date, start_time, end_time):
+def handle_booking_submission(room_name, booking_date, start_time, end_time):
     """Processes the form data and attempts to create a new booking."""
     
-    # Check if user is authenticated (should be handled by form, but good for security)
     if st.session_state.authenticated_user is None:
         st.error("Authentication required to submit a booking.", icon="🔒")
         return
         
-    # 1. Basic time validation
     if start_time >= end_time:
         st.error("❌ The start time must be before the end time.", icon="⚠️")
         return
+    
+    current_user_data = USERS_DB[st.session_state.authenticated_user]
+    user_email = current_user_data['email']
         
-    # 2. Create the new booking object
     new_booking = {
         'room': room_name,
         'date': booking_date,
         'start_time': start_time,
         'end_time': end_time,
-        'user': st.session_state.authenticated_user, # Use the verified username
+        'user_id': st.session_state.authenticated_user,
+        'user_email': user_email,
     }
 
-    # 3. Conflict Check
     if is_conflict(new_booking):
         st.error(f"❌ Booking conflict! {room_name} is already booked on {booking_date.strftime('%Y-%m-%d')} between {start_time.strftime('%H:%M')} and {end_time.strftime('%H:%M')}.", icon="🚨")
     else:
-        # 4. Add booking and success message
         st.session_state.bookings.append(new_booking)
         st.success(f"✅ Success! {room_name} booked by {st.session_state.authenticated_user} for {booking_date.strftime('%Y-%m-%d')} from {start_time.strftime('%H:%M')} to {end_time.strftime('%H:%M')}.", icon="🎉")
 
-
-# --- UI Components ---
+# --- UI Components: Authentication ---
 
 def authenticate_user():
-    """Handles the user login/authentication process."""
-    st.sidebar.subheader("🔒 User Authorization")
+    """Handles the user login/authentication process using username and password."""
+    st.sidebar.subheader("🔒 User Login")
     
     if st.session_state.authenticated_user:
-        st.sidebar.success(f"Logged in as: **{st.session_state.authenticated_user}**")
+        role = st.session_state.user_role.upper()
+        st.sidebar.success(f"Logged in as: **{st.session_state.authenticated_user}** ({role})")
         if st.sidebar.button("Logout", key="logout_btn", use_container_width=True):
             st.session_state.authenticated_user = None
+            st.session_state.user_role = None
             st.rerun()
         return True
     
+    # Login Form
     with st.sidebar.form(key='login_form'):
-        username_input = st.text_input("Enter your authorized username/email", key="auth_user_input")
+        username = st.text_input("Username", key="login_username_input")
+        password = st.text_input("Password", type="password", key="login_password_input")
+        
         login_button = st.form_submit_button("Log In", use_container_width=True, type="primary")
 
         if login_button:
-            if username_input.lower() in [u.lower() for u in AUTHORIZED_USERS]:
-                st.session_state.authenticated_user = username_input
-                st.success(f"Welcome, {username_input}!", icon="👋")
-                st.rerun()
+            if username in USERS_DB:
+                entered_hash = hash_password(password)
+                
+                if entered_hash == USERS_DB[username]['hashed_password']:
+                    st.session_state.authenticated_user = username
+                    st.session_state.user_role = USERS_DB[username]['role'] # <-- Store Role
+                    st.success(f"Welcome back, {username}!", icon="👋")
+                    st.rerun()
+                else:
+                    st.error("Invalid password.", icon="⛔")
             else:
-                st.error("Access Denied. Your username is not in the authorized list.", icon="⛔")
+                st.error("Invalid username. Please check your credentials.", icon="⛔")
     return False
+
+# --- UI Components: Data Export and Availability ---
 
 @st.cache_data
 def convert_df_to_csv(df):
     """Converts a Pandas DataFrame to a CSV for download."""
-    # Convert time and date objects to strings for clean export
     df_export = df.copy()
     df_export['date'] = df_export['date'].astype(str)
     df_export['start_time'] = df_export['start_time'].astype(str)
     df_export['end_time'] = df_export['end_time'].astype(str)
     
+    df_export = df_export.rename(columns={
+        'user_id': 'Username',
+        'user_email': 'Email'
+    })
+
     return df_export.to_csv(index=False).encode('utf-8')
 
 
@@ -129,7 +178,6 @@ def display_availability_matrix():
     """Displays a visual matrix of room availability for a selected day."""
     st.subheader("🗓️ Real-Time Availability Calendar")
     
-    # 1. Date Selector
     view_date = st.date_input(
         "Select Date to View Availability", 
         value=datetime.date.today(),
@@ -137,47 +185,41 @@ def display_availability_matrix():
     )
 
     if not st.session_state.bookings:
-        st.info(f"All rooms are available on {view_date.strftime('%Y-%m-%d')}.")
+        st.info(f"All rooms are available on {view_date.strftime('%Y-%m-%d')}.", icon="💡")
         return
 
-    # Filter bookings for the selected day
     daily_bookings = [
         b for b in st.session_state.bookings if b['date'] == view_date
     ]
 
-    # 2. Setup Time Slots (30-minute intervals for visualization)
+    # Setup Time Slots (30-minute intervals for visualization)
     time_index = []
-    start_hour = 8 # Start visualization at 8:00
-    end_hour = 17 # End visualization at 17:00 (5 PM)
+    start_hour = 8
+    end_hour = 17
     
     for h in range(start_hour, end_hour):
         time_index.append(f"{h:02d}:00")
         time_index.append(f"{h:02d}:30")
     
-    # 3. Create Availability DataFrame
     availability_df = pd.DataFrame(index=time_index, columns=list(ROOMS.keys())).fillna("✅ Available")
     
-    # Populate the DataFrame with booking info
+    # Process bookings and mark availability
     for booking in daily_bookings:
         room = booking['room']
         
-        # Convert time objects to minutes since midnight for easy comparison
+        # We combine date and time to create datetime objects for boundary checks
         book_start_dt = datetime.datetime.combine(view_date, booking['start_time'])
         book_end_dt = datetime.datetime.combine(view_date, booking['end_time'])
         
-        # Iterate through the 30-minute slots in the index
         for slot_time_str in time_index:
             slot_time = datetime.datetime.strptime(slot_time_str, "%H:%M").time()
             slot_dt = datetime.datetime.combine(view_date, slot_time)
-            
-            # Define the 30-minute window for the slot
             slot_end_dt = slot_dt + datetime.timedelta(minutes=30)
 
-            # Check for conflict in this slot: Slot starts before booking ends AND Slot ends after booking starts
+            # Check for conflict: Slot starts before booking ends AND Slot ends after booking starts
             if slot_dt < book_end_dt and slot_end_dt > book_start_dt:
-                availability_df.loc[slot_time_str, room] = f"❌ Booked by {booking['user']}"
+                availability_df.loc[slot_time_str, room] = f"❌ Booked by {booking['user_id']}"
 
-    # 4. Styling and Display
     def color_cells(val):
         """Color code for the availability table."""
         if "Available" in str(val):
@@ -194,11 +236,9 @@ def display_availability_matrix():
         }
     )
 
-
 def display_data_and_export():
-    """Displays the list of rooms and the current bookings with an export button."""
+    """Displays the list of rooms and the current bookings with a role-based export button."""
     
-    # 1. Room Information
     st.subheader("🏢 Meeting Room Specs")
     
     rooms_df = pd.DataFrame([
@@ -211,38 +251,40 @@ def display_data_and_export():
     ])
     st.dataframe(rooms_df, use_container_width=True, hide_index=True)
 
-    # 2. Current Bookings and Export
     st.subheader("📚 All Current Bookings")
     
     if not st.session_state.bookings:
         st.info("No rooms are currently booked.", icon="💡")
     else:
         bookings_df = pd.DataFrame(st.session_state.bookings)
-        
-        # Sort data for better readability
         bookings_df = bookings_df.sort_values(by=['date', 'start_time'], ascending=True)
         
-        # Rename columns for display
         bookings_df_display = bookings_df.rename(columns={
             'room': 'Room',
             'date': 'Date',
             'start_time': 'Start Time',
             'end_time': 'End Time',
-            'user': 'Booked By'
+            'user_id': 'Username',
+            'user_email': 'Email'
         })
         
         st.dataframe(bookings_df_display, use_container_width=True, hide_index=True)
 
-        # Export Functionality
-        csv = convert_df_to_csv(bookings_df)
-        st.download_button(
-            label="⬇️ Export All Bookings to CSV",
-            data=csv,
-            file_name=f'meeting_room_bookings_{datetime.date.today()}.csv',
-            mime='text/csv',
-            type="secondary",
-            use_container_width=True
-        )
+        # Export Functionality: Only show to admins
+        if st.session_state.user_role == 'admin':
+            csv = convert_df_to_csv(bookings_df)
+            st.download_button(
+                label="⬇️ Export All Bookings to CSV (Admin Only)",
+                data=csv,
+                file_name=f'meeting_room_bookings_{datetime.date.today()}.csv',
+                mime='text/csv',
+                type="primary",
+                use_container_width=True
+            )
+        elif st.session_state.authenticated_user:
+            st.info("You must be an admin to export the full booking statistics.")
+        else:
+            st.info("Log in to view booking data and potential admin export options.")
 
 
 # --- Main Application Layout ---
@@ -264,13 +306,9 @@ def main():
     is_authenticated = authenticate_user()
 
     # 2. Main Content Layout
-    
-    # First section: Availability Matrix
     display_availability_matrix()
     st.markdown("---")
 
-
-    # Second section: Booking Form (only for authenticated users) and Data Display
     col1, col2 = st.columns([1, 2])
     
     with col1:
@@ -278,8 +316,10 @@ def main():
         if is_authenticated:
             # Booking Form
             with st.form(key='booking_form', clear_on_submit=True):
-                # User is pre-filled/known from authentication
-                st.write(f"Booking as: **{st.session_state.authenticated_user}**")
+                # Display current user info
+                current_user = st.session_state.authenticated_user
+                current_email = USERS_DB[current_user]['email']
+                st.info(f"Booking as: **{current_user}** ({current_email})")
                 
                 # Booking details
                 room_name = st.selectbox(
@@ -312,19 +352,17 @@ def main():
                     )
                 
                 # Submit button
-                submit_button = st.form_submit_button(
+                st.form_submit_button(
                     label='Confirm Booking',
                     use_container_width=True,
                     type="primary",
                     on_click=handle_booking_submission,
-                    # Arguments passed to the callback function
-                    args=(st.session_state.authenticated_user, room_name, booking_date, start_time, end_time)
+                    args=(room_name, booking_date, start_time, end_time)
                 )
         else:
-            st.warning("Please log in on the sidebar to make a new booking.", icon="👉")
+            st.warning("Please log in on the sidebar to access the booking form.", icon="👉")
 
     with col2:
-        # Display Rooms Specs and all Bookings with Export button
         display_data_and_export()
 
 
