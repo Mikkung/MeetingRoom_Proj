@@ -6,8 +6,7 @@ import pandas as pd
 ROOMS = {
     "ISE_Meeting_Room_I_305_Fl1": {"capacity": 8, "has_projector": True},
     "ISE_Meeting_Room_II_Fl2": {"capacity": 20, "has_projector": True},
-    "ISE_Meeting_Room_III_304/1_Fl1": {"capacity": 20, "has_projector": False},
-    ,
+    "ISE_Meeting_Room_III_304/1_Fl1": {"capacity": 20, "has_projector": False}
 }
 TIME_SLOTS = [
     "09:00 - 10:00", "10:00 - 11:00", "11:00 - 12:00", 
@@ -189,4 +188,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
