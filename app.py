@@ -14,7 +14,7 @@ from io import BytesIO
 USERS_DB = {
     "Mikkung": {
         "email": "thanaphon.a@chula.ac.th",
-        "hashed_password": "mikkyja", # hash of "p123"
+        "hashed_password": "mik123", # hash of "p123"
         "role": "admin" 
     },
     "jane.smith": {
@@ -368,4 +368,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
