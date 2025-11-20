@@ -12,10 +12,10 @@ from io import BytesIO
 # - jane.smith / p456 / user
 # - admin.user / p789 / admin
 USERS_DB = {
-    "john.doe": {
-        "email": "john.doe@ise.com",
-        "hashed_password": "46f947938392150917631336c1e345f22f796245c363b8c32e079a2f64f434c4", # hash of "p123"
-        "role": "user" 
+    "Mikkung": {
+        "email": "thanaphon.a@chula.ac.th",
+        "hashed_password": "mikkyja", # hash of "p123"
+        "role": "admin" 
     },
     "jane.smith": {
         "email": "jane.smith@ise.com",
@@ -368,3 +368,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
