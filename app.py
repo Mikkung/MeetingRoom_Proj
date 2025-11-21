@@ -1,31 +1,30 @@
 import streamlit as st
 import datetime
 import pandas as pd
-import hashlib
 from io import BytesIO
 
 # --- Configuration ---
 
-# 1. Mock User Database with Roles (In a real application, this would be a secure database query)
+# 1. Mock User Database with Roles (!!! คำเตือน: ตอนนี้เก็บรหัสผ่านเป็นข้อความธรรมดา - ไม่ปลอดภัย !!!)
 # Test Credentials (Username / Password / Role):
 # - john.doe / p123 / user
 # - jane.smith / p456 / user
 # - admin.user / p789 / admin
 USERS_DB = {
-    "Mikkung": {
-        "email": "thanaphon.a@chula.ac.th",
-        "hashed_password": "e7228a8d1163462f4e8b34c26a578a05f01dd531853d858348af7dd4c4a45a6c", # hash of "p123"
-        "role": "admin" 
+    "john.doe": {
+        "email": "john.doe@ise.com",
+        "password": "p123", # <--- รหัสผ่านถูกเก็บเป็นข้อความธรรมดา
+        "role": "user" 
     },
     "jane.smith": {
         "email": "jane.smith@ise.com",
-        "hashed_password": "e7228a8d1163462f4e8b34c26a578a05f01dd531853d858348af7dd4c4a45a6c", # hash of "p456"
+        "password": "p456", # <--- รหัสผ่านถูกเก็บเป็นข้อความธรรมดา
         "role": "user"
     },
     "admin.user": {
         "email": "admin@ise.com",
-        "hashed_password": "95a5f78233f811568478d6b8c4c7c59573887c2b3c220265275817d23f309d94", # hash of "p789"
-        "role": "admin" # <-- ONLY ADMIN CAN EXPORT STATS
+        "password": "p789", # <--- รหัสผ่านถูกเก็บเป็นข้อความธรรมดา
+        "role": "admin" 
     }
 }
 
@@ -36,16 +35,10 @@ ROOMS = {
     "ISE_Meeting_Room_III_304/1_Fl1": {"capacity": 20, "has_projector": False}
 }
 
-# --- Utility Functions ---
-
-def hash_password(password):
-    """Generates a SHA256 hash of the input password."""
-    return hashlib.sha256(password.encode()).hexdigest()
-
 # --- State Management and Conflict Check ---
 
 def initialize_state():
-    """Initializes Streamlit session state variables."""
+    """เริ่มต้นตัวแปร Session State ของ Streamlit"""
     if 'bookings' not in st.session_state:
         st.session_state.bookings = []
     
@@ -59,22 +52,19 @@ def initialize_state():
         st.session_state.user_role = None
 
 def is_time_overlap(start1, end1, start2, end2):
-    """Checks if two time ranges overlap. Times are datetime.time objects."""
-    # Convert to seconds since midnight for robust comparison
+    """ตรวจสอบว่าช่วงเวลาสองช่วงทับซ้อนกันหรือไม่ (ใช้ datetime.time objects)"""
     def time_to_seconds(t):
-        # Handle cases where t might be None if widget is empty, though st.time_input prevents this
         if t is None: return -1 
         return t.hour * 3600 + t.minute * 60 + t.second
     
     s1, e1 = time_to_seconds(start1), time_to_seconds(end1)
     s2, e2 = time_to_seconds(start2), time_to_seconds(end2)
     
-    # Non-overlap condition: (End1 <= Start2) OR (Start1 >= End2)
-    # Overlap is the negation: NOT ((End1 <= Start2) OR (Start1 >= End2))
+    # เงื่อนไขการทับซ้อน
     return not (e1 <= s2 or s1 >= e2)
 
 def is_conflict(new_booking):
-    """Checks if a new booking conflicts with any existing booking."""
+    """ตรวจสอบว่าการจองใหม่ขัดแย้งกับการจองที่มีอยู่หรือไม่"""
     new_room = new_booking['room']
     new_date = new_booking['date']
     new_start = new_booking['start_time']
@@ -91,14 +81,14 @@ def is_conflict(new_booking):
 
 # --- Callback function for Form Submission ---
 def handle_booking_submission(room_name, booking_date, start_time, end_time):
-    """Processes the form data and attempts to create a new booking."""
+    """ประมวลผลข้อมูลฟอร์มและพยายามสร้างการจองใหม่"""
     
     if st.session_state.authenticated_user is None:
-        st.error("Authentication required to submit a booking.", icon="🔒")
+        st.error("🔒 ต้องทำการยืนยันตัวตนเพื่อทำการจอง", icon="🔒")
         return
         
     if start_time >= end_time:
-        st.error("❌ The start time must be before the end time.", icon="⚠️")
+        st.error("❌ เวลาเริ่มต้นต้องอยู่ก่อนเวลาสิ้นสุด", icon="⚠️")
         return
     
     current_user_data = USERS_DB[st.session_state.authenticated_user]
@@ -114,21 +104,21 @@ def handle_booking_submission(room_name, booking_date, start_time, end_time):
     }
 
     if is_conflict(new_booking):
-        st.error(f"❌ Booking conflict! {room_name} is already booked on {booking_date.strftime('%Y-%m-%d')} between {start_time.strftime('%H:%M')} and {end_time.strftime('%H:%M')}.", icon="🚨")
+        st.error(f"❌ การจองขัดแย้ง! {room_name} ถูกจองแล้วในวันที่ {booking_date.strftime('%Y-%m-%d')} ระหว่าง {start_time.strftime('%H:%M')} ถึง {end_time.strftime('%H:%M')}.", icon="🚨")
     else:
         st.session_state.bookings.append(new_booking)
-        st.success(f"✅ Success! {room_name} booked by {st.session_state.authenticated_user} for {booking_date.strftime('%Y-%m-%d')} from {start_time.strftime('%H:%M')} to {end_time.strftime('%H:%M')}.", icon="🎉")
+        st.success(f"✅ สำเร็จ! {room_name} ถูกจองโดย {st.session_state.authenticated_user} สำหรับวันที่ {booking_date.strftime('%Y-%m-%d')} ตั้งแต่ {start_time.strftime('%H:%M')} ถึง {end_time.strftime('%H:%M')}.", icon="🎉")
 
 # --- UI Components: Authentication ---
 
 def authenticate_user():
-    """Handles the user login/authentication process using username and password."""
-    st.sidebar.subheader("🔒 User Login")
+    """จัดการกระบวนการล็อกอิน/ยืนยันตัวตนของผู้ใช้ด้วย username และ password"""
+    st.sidebar.subheader("🔒 เข้าสู่ระบบ")
     
     if st.session_state.authenticated_user:
-        role = st.session_state.user_role.upper()
-        st.sidebar.success(f"Logged in as: **{st.session_state.authenticated_user}** ({role})")
-        if st.sidebar.button("Logout", key="logout_btn", use_container_width=True):
+        role_thai = "ผู้ดูแลระบบ" if st.session_state.user_role == 'admin' else "ผู้ใช้งานทั่วไป"
+        st.sidebar.success(f"เข้าสู่ระบบในชื่อ: **{st.session_state.authenticated_user}** ({role_thai})")
+        if st.sidebar.button("ออกจากระบบ", key="logout_btn", use_container_width=True):
             st.session_state.authenticated_user = None
             st.session_state.user_role = None
             st.rerun()
@@ -136,31 +126,31 @@ def authenticate_user():
     
     # Login Form
     with st.sidebar.form(key='login_form'):
-        username = st.text_input("Username", key="login_username_input")
-        password = st.text_input("Password", type="password", key="login_password_input")
+        username = st.text_input("ชื่อผู้ใช้ (Username)", key="login_username_input")
+        password = st.text_input("รหัสผ่าน (Password)", type="password", key="login_password_input")
         
-        login_button = st.form_submit_button("Log In", use_container_width=True, type="primary")
+        login_button = st.form_submit_button("เข้าสู่ระบบ", use_container_width=True, type="primary")
 
         if login_button:
             if username in USERS_DB:
-                entered_hash = hash_password(password)
-                
-                if entered_hash == USERS_DB[username]['hashed_password']:
+                # ตรรกะที่ไม่ปลอดภัย: เปรียบเทียบรหัสผ่านแบบข้อความธรรมดาโดยตรง
+                if password == USERS_DB[username]['password']: 
                     st.session_state.authenticated_user = username
-                    st.session_state.user_role = USERS_DB[username]['role'] # <-- Store Role
-                    st.success(f"Welcome back, {username}!", icon="👋")
+                    st.session_state.user_role = USERS_DB[username]['role'] 
+                    st.success(f"ยินดีต้อนรับ, {username}!", icon="👋")
                     st.rerun()
+                # ------------------------------------------------------------------
                 else:
-                    st.error("Invalid password.", icon="⛔")
+                    st.error("⛔ รหัสผ่านไม่ถูกต้อง", icon="⛔")
             else:
-                st.error("Invalid username. Please check your credentials.", icon="⛔")
+                st.error("⛔ ชื่อผู้ใช้ไม่ถูกต้อง กรุณาตรวจสอบข้อมูล", icon="⛔")
     return False
 
 # --- UI Components: Data Export and Availability ---
 
 @st.cache_data
 def convert_df_to_csv(df):
-    """Converts a Pandas DataFrame to a CSV for download."""
+    """แปลง Pandas DataFrame เป็น CSV สำหรับดาวน์โหลด"""
     df_export = df.copy()
     df_export['date'] = df_export['date'].astype(str)
     df_export['start_time'] = df_export['start_time'].astype(str)
@@ -175,24 +165,24 @@ def convert_df_to_csv(df):
 
 
 def display_availability_matrix():
-    """Displays a visual matrix of room availability for a selected day."""
-    st.subheader("🗓️ Real-Time Availability Calendar")
+    """แสดงตารางสถานะห้องว่างแบบเรียลไทม์สำหรับวันที่เลือก"""
+    st.subheader("🗓️ ปฏิทินสถานะห้องว่างแบบเรียลไทม์")
     
     view_date = st.date_input(
-        "Select Date to View Availability", 
+        "เลือกวันที่เพื่อดูสถานะห้องว่าง", 
         value=datetime.date.today(),
         key="view_date_select"
     )
 
     if not st.session_state.bookings:
-        st.info(f"All rooms are available on {view_date.strftime('%Y-%m-%d')}.", icon="💡")
+        st.info(f"💡 ห้องทั้งหมดว่างในวันที่ {view_date.strftime('%Y-%m-%d')}.", icon="💡")
         return
 
     daily_bookings = [
         b for b in st.session_state.bookings if b['date'] == view_date
     ]
 
-    # Setup Time Slots (30-minute intervals for visualization)
+    # ตั้งค่าช่วงเวลา (Interval 30 นาทีสำหรับการแสดงผล)
     time_index = []
     start_hour = 8
     end_hour = 17
@@ -203,11 +193,10 @@ def display_availability_matrix():
     
     availability_df = pd.DataFrame(index=time_index, columns=list(ROOMS.keys())).fillna("✅ Available")
     
-    # Process bookings and mark availability
+    # ประมวลผลการจองและทำเครื่องหมายสถานะ
     for booking in daily_bookings:
         room = booking['room']
         
-        # We combine date and time to create datetime objects for boundary checks
         book_start_dt = datetime.datetime.combine(view_date, booking['start_time'])
         book_end_dt = datetime.datetime.combine(view_date, booking['end_time'])
         
@@ -216,16 +205,16 @@ def display_availability_matrix():
             slot_dt = datetime.datetime.combine(view_date, slot_time)
             slot_end_dt = slot_dt + datetime.timedelta(minutes=30)
 
-            # Check for conflict: Slot starts before booking ends AND Slot ends after booking starts
+            # ตรวจสอบการทับซ้อน
             if slot_dt < book_end_dt and slot_end_dt > book_start_dt:
                 availability_df.loc[slot_time_str, room] = f"❌ Booked by {booking['user_id']}"
 
     def color_cells(val):
-        """Color code for the availability table."""
+        """กำหนดสีให้กับเซลล์ตามสถานะ"""
         if "Available" in str(val):
-            return 'background-color: #d4edda; color: #155724' # Light green
+            return 'background-color: #d4edda; color: #155724' # สีเขียวอ่อน
         else:
-            return 'background-color: #f8d7da; color: #721c24' # Light red
+            return 'background-color: #f8d7da; color: #721c24' # สีแดงอ่อน
 
     st.dataframe(
         availability_df.style.applymap(color_cells), 
@@ -237,9 +226,9 @@ def display_availability_matrix():
     )
 
 def display_data_and_export():
-    """Displays the list of rooms and the current bookings with a role-based export button."""
+    """แสดงรายการห้องและการจองปัจจุบัน พร้อมปุ่ม export ที่จำกัดสิทธิ์ตามบทบาท"""
     
-    st.subheader("🏢 Meeting Room Specs")
+    st.subheader("🏢 รายละเอียดห้องประชุม")
     
     rooms_df = pd.DataFrame([
         {
@@ -251,30 +240,30 @@ def display_data_and_export():
     ])
     st.dataframe(rooms_df, use_container_width=True, hide_index=True)
 
-    st.subheader("📚 All Current Bookings")
+    st.subheader("📚 รายการจองทั้งหมดในปัจจุบัน")
     
     if not st.session_state.bookings:
-        st.info("No rooms are currently booked.", icon="💡")
+        st.info("💡 ไม่มีห้องที่ถูกจองอยู่ในขณะนี้", icon="💡")
     else:
         bookings_df = pd.DataFrame(st.session_state.bookings)
         bookings_df = bookings_df.sort_values(by=['date', 'start_time'], ascending=True)
         
         bookings_df_display = bookings_df.rename(columns={
-            'room': 'Room',
-            'date': 'Date',
-            'start_time': 'Start Time',
-            'end_time': 'End Time',
-            'user_id': 'Username',
-            'user_email': 'Email'
+            'room': 'ห้อง',
+            'date': 'วันที่',
+            'start_time': 'เวลาเริ่มต้น',
+            'end_time': 'เวลาสิ้นสุด',
+            'user_id': 'ชื่อผู้ใช้',
+            'user_email': 'อีเมล'
         })
         
         st.dataframe(bookings_df_display, use_container_width=True, hide_index=True)
 
-        # Export Functionality: Only show to admins
+        # ฟังก์ชัน Export: แสดงเฉพาะผู้ดูแลระบบ (Admin)
         if st.session_state.user_role == 'admin':
             csv = convert_df_to_csv(bookings_df)
             st.download_button(
-                label="⬇️ Export All Bookings to CSV (Admin Only)",
+                label="⬇️ ส่งออกข้อมูลการจองทั้งหมดเป็น CSV (สำหรับ Admin เท่านั้น)",
                 data=csv,
                 file_name=f'meeting_room_bookings_{datetime.date.today()}.csv',
                 mime='text/csv',
@@ -282,14 +271,14 @@ def display_data_and_export():
                 use_container_width=True
             )
         elif st.session_state.authenticated_user:
-            st.info("You must be an admin to export the full booking statistics.")
+            st.info("คุณต้องเป็นผู้ดูแลระบบ (Admin) เท่านั้น จึงจะสามารถส่งออกข้อมูลสถิติการจองทั้งหมดได้")
         else:
-            st.info("Log in to view booking data and potential admin export options.")
+            st.info("เข้าสู่ระบบเพื่อดูข้อมูลการจองและตัวเลือกการส่งออกสำหรับ Admin")
 
 
 # --- Main Application Layout ---
 def main():
-    """The main function to run the Streamlit application."""
+    """ฟังก์ชันหลักสำหรับรันแอปพลิเคชัน Streamlit"""
     st.set_page_config(
         page_title="ISE Meeting Room Scheduler",
         page_icon="📅",
@@ -299,37 +288,37 @@ def main():
 
     st.title("ISE Meeting Room Scheduler 🏢")
     
-    # Initialize state on first run
+    # เริ่มต้นสถานะ
     initialize_state()
     
-    # 1. Authentication happens in the sidebar
+    # 1. การยืนยันตัวตน (อยู่ใน Sidebar)
     is_authenticated = authenticate_user()
 
-    # 2. Main Content Layout
+    # 2. ส่วนเนื้อหาหลัก
     display_availability_matrix()
     st.markdown("---")
 
     col1, col2 = st.columns([1, 2])
     
     with col1:
-        st.subheader("📝 New Booking Request")
+        st.subheader("📝 สร้างการจองใหม่")
         if is_authenticated:
-            # Booking Form
+            # ฟอร์มการจอง
             with st.form(key='booking_form', clear_on_submit=True):
-                # Display current user info
+                # แสดงข้อมูลผู้ใช้ปัจจุบัน
                 current_user = st.session_state.authenticated_user
                 current_email = USERS_DB[current_user]['email']
-                st.info(f"Booking as: **{current_user}** ({current_email})")
+                st.info(f"ทำการจองในชื่อ: **{current_user}** ({current_email})")
                 
-                # Booking details
+                # รายละเอียดการจอง
                 room_name = st.selectbox(
-                    "1. Select Room", 
+                    "1. เลือกห้อง", 
                     options=list(st.session_state.rooms.keys()),
                     key="room_select"
                 )
 
                 booking_date = st.date_input(
-                    "2. Date", 
+                    "2. วันที่", 
                     value=datetime.date.today(),
                     min_value=datetime.date.today(),
                     key="date_select"
@@ -338,29 +327,29 @@ def main():
                 cols_time = st.columns(2)
                 with cols_time[0]:
                     start_time = st.time_input(
-                        "3. Start Time",
+                        "3. เวลาเริ่มต้น",
                         value=datetime.time(9, 0),
                         step=600, # 10 minute step for flexibility
                         key="start_time_input"
                     )
                 with cols_time[1]:
                     end_time = st.time_input(
-                        "4. End Time",
+                        "4. เวลาสิ้นสุด",
                         value=datetime.time(10, 0),
                         step=600, # 10 minute step for flexibility
                         key="end_time_input"
                     )
                 
-                # Submit button
+                # ปุ่มยืนยัน
                 st.form_submit_button(
-                    label='Confirm Booking',
+                    label='ยืนยันการจอง',
                     use_container_width=True,
                     type="primary",
                     on_click=handle_booking_submission,
                     args=(room_name, booking_date, start_time, end_time)
                 )
         else:
-            st.warning("Please log in on the sidebar to access the booking form.", icon="👉")
+            st.warning("👉 กรุณาเข้าสู่ระบบที่แถบด้านข้าง (Sidebar) เพื่อเข้าถึงฟอร์มการจอง", icon="👉")
 
     with col2:
         display_data_and_export()
@@ -368,6 +357,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
