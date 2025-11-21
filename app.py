@@ -15,17 +15,17 @@ except ImportError:
 
 # 🛑 นำเข้าไลบรารี Firebase
 try:
-    from firebase_admin import credentials, firestore, initialize_app
+    from firebase_admin import credentials, firestore, initialize_app, get_app
     firebase_installed = True
 except ImportError:
+    from firebase_admin import get_app
     firebase_installed = False
     st.error("❌ ไม่พบไลบรารี 'firebase-admin' กรุณาติดตั้งเพื่อเชื่อมต่อ Firestore", icon="🚨")
 
 
-# --- CONFIGURATION & MOCK FALLBACK (Minimal Hardcode) ---
+# --- CONFIGURATION & MOCK FALLBACK ---
 
-# 1. Mock/Fallback for Authentication (ใช้เฉพาะในกรณีที่ DB โหลดไม่ได้)
-# NOTE: In production, all actual user credentials should reside in Firestore
+# 1. Mock User Database (ใช้ Hash ที่คุณสร้างและจะอัปเดต)
 MOCK_USER_FALLBACK = {
     "admin.user": {
         "email": "admin@ise.com",
@@ -45,18 +45,29 @@ ROOMS = {
 # --- DATABASE / FIREBASE LOGIC ---
 
 def init_database_connection():
-    """เชื่อมต่อกับ Firestore โดยใช้ st.secrets"""
+    """เชื่อมต่อกับ Firestore โดยใช้ st.secrets และป้องกันการเริ่มต้นซ้ำ"""
     if 'db_ready' not in st.session_state:
         if not firebase_installed:
             st.session_state.db_ready = False
             return
             
         try:
-            key_dict = json.loads(st.secrets["firestore_credentials"])
+            # 🛑 1. ตรวจสอบว่าแอปพลิเคชัน Firebase ถูกเริ่มต้นไปแล้วหรือไม่
+            try:
+                get_app()
+                app_initialized = True
+            except ValueError:
+                app_initialized = False
+
+            if not app_initialized:
+                # 2. โหลด Credentials จาก st.secrets
+                key_dict = json.loads(st.secrets["firestore_credentials"])
+                
+                # 3. ยืนยันตัวตนและเริ่มต้น Firebase App (ถ้ายังไม่เริ่ม)
+                cred = credentials.Certificate(key_dict)
+                initialize_app(cred)
             
-            cred = credentials.Certificate(key_dict)
-            initialize_app(cred)
-            
+            # 4. สร้าง Firestore Client (และเก็บไว้ใน Session State)
             st.session_state.db = firestore.client()
             st.session_state.db_ready = True
             st.sidebar.success("✅ เชื่อมต่อ Firestore สำเร็จ", icon="🌐")
@@ -64,20 +75,21 @@ def init_database_connection():
         except Exception as e:
             st.session_state.db_ready = False
             st.sidebar.error(f"❌ ข้อผิดพลาดในการเชื่อมต่อ Firestore: {e}", icon="🚨")
+            st.sidebar.error("💡 ตรวจสอบ: Key 'firestore_credentials' ใน Streamlit Secrets", icon="🛠️")
 
 
-# 🛑 B1: LOADING USERS FROM DB (New Function)
+# 🛑 B1: LOADING USERS FROM DB
 @st.cache_data(ttl=3600) # Cache User List for 1 hour
 def load_users_from_db():
     """โหลดข้อมูลผู้ใช้ทั้งหมดจาก Collection 'users' ใน Firestore"""
     if not st.session_state.db_ready:
-        return MOCK_USER_FALLBACK # Return fallback if DB fails
+        return MOCK_USER_FALLBACK 
 
     try:
         users = {}
+        # 🛑 Firestore Collection Name: 'users'
         docs = st.session_state.db.collection("users").stream()
         for doc in docs:
-            # ใช้ Document ID เป็น Username
             user_data = doc.to_dict()
             users[doc.id] = user_data
         
@@ -88,10 +100,10 @@ def load_users_from_db():
         return users
     except Exception as e:
         st.error(f"❌ ข้อผิดพลาดในการโหลดข้อมูลผู้ใช้จาก DB: {e}", icon="🚨")
-        return MOCK_USER_FALLBACK # Fallback on error
+        return MOCK_USER_FALLBACK 
 
 
-# 🛑 B2: LOADING BOOKINGS FROM DB (Existing Function)
+# 🛑 B2: LOADING BOOKINGS FROM DB
 @st.cache_data(ttl=60)
 def load_bookings_from_db():
     """โหลดข้อมูลการจองทั้งหมดจาก Firestore"""
@@ -107,7 +119,7 @@ def load_bookings_from_db():
         return []
 
 
-# 🛑 C: SAVING DATA TO DB (Real Firestore Logic)
+# 🛑 C: SAVING DATA TO DB
 def save_booking_to_db(new_booking):
     """บันทึกการจองใหม่ไปยัง Firestore"""
     if not st.session_state.db_ready:
@@ -133,7 +145,8 @@ def initialize_state():
     if 'user_role' not in st.session_state:
         st.session_state.user_role = None
 
-    init_database_connection() # เชื่อมต่อ DB
+    # เรียกใช้ฟังก์ชันเชื่อมต่อฐานข้อมูล
+    init_database_connection()
 
 
 def is_time_overlap(start1, end1, start2, end2):
@@ -180,7 +193,6 @@ def handle_booking_submission(room_name, booking_date, start_time, end_time):
         st.error("❌ เวลาเริ่มต้นต้องอยู่ก่อนเวลาสิ้นสุด", icon="⚠️")
         return
     
-    # 🛑 ดึงข้อมูลผู้ใช้จาก DB (หรือ Mock Fallback)
     current_users = load_users_from_db() 
     user_email = current_users[st.session_state.authenticated_user]['email']
     
@@ -211,17 +223,18 @@ def authenticate_user():
     st.sidebar.subheader("🔒 เข้าสู่ระบบ (Production)")
     
     if st.session_state.authenticated_user:
-        role_thai = "ผู้ดูแลระบบ" if st.session_state.user_role == 'admin' else "ผู้ใช้งานทั่วไป"
+        current_users = load_users_from_db() 
+        current_role = current_users[st.session_state.authenticated_user]['role']
+        role_thai = "ผู้ดูแลระบบ" if current_role == 'admin' else "ผู้ใช้งานทั่วไป"
         st.sidebar.success(f"เข้าสู่ระบบในชื่อ: **{st.session_state.authenticated_user}** ({role_thai})")
         if st.sidebar.button("ออกจากระบบ", key="logout_btn", use_container_width=True):
             st.session_state.authenticated_user = None
             st.session_state.user_role = None
             load_bookings_from_db.clear()
-            load_users_from_db.clear() # Clear user cache
+            load_users_from_db.clear()
             st.rerun()
         return True
     
-    # 🛑 โหลดผู้ใช้จาก DB ทุกครั้งที่มีการพยายามล็อกอิน
     current_users = load_users_from_db() 
 
     with st.sidebar.form(key='login_form'):
@@ -237,13 +250,12 @@ def authenticate_user():
                 is_correct = False
                 if bcrypt_installed:
                     try:
-                        # 🛑 ตรวจสอบรหัสผ่านกับ Hash ที่โหลดมาจาก DB
                         if bcrypt.checkpw(password.encode('utf-8'), stored_hash):
                             is_correct = True
                     except Exception:
                         pass
                 else:
-                    # 🛑 Mock Check (ใช้สำหรับกรณีที่ไม่มี bcrypt ใน env)
+                    # 🛑 Mock Check (ใช้รหัสผ่าน Plain Text สำหรับการทดสอบเมื่อไม่มี bcrypt)
                     if current_users[username].get('role') == 'admin' and password == 'p789':
                          is_correct = True
                 
@@ -434,7 +446,6 @@ def main():
             st.error("⛔ ไม่สามารถใช้งานฟอร์มได้: การเชื่อมต่อฐานข้อมูลล้มเหลว", icon="🚨")
         elif is_authenticated:
             with st.form(key='booking_form', clear_on_submit=True):
-                # 🛑 ดึงข้อมูลผู้ใช้ที่ล็อกอินแล้วเพื่อแสดงในฟอร์ม
                 current_users = load_users_from_db()
                 current_user = st.session_state.authenticated_user
                 current_email = current_users[current_user]['email']
