@@ -65,6 +65,7 @@ def init_database_connection():
             return
             
         try:
+            # ป้องกันการเรียก initialize_app ซ้ำ
             try:
                 get_app()
             except ValueError:
@@ -379,63 +380,75 @@ def display_signup_form():
         st.rerun()
 
 
-# --- UI Components: Display & Export ---
-
-def display_availability_chart(bookings, view_date):
-    """แสดงสถานะห้องว่างแบบ Graphical Calendar View (Plotly Gantt Chart)"""
-    st.subheader(f"🗓️ สถานะห้องว่างแบบแผนภูมิ (วันที่ {view_date.strftime('%Y-%m-%d')})")
-
-    daily_bookings = []
-    for b in bookings:
-        try:
-            booking_date = datetime.date.fromisoformat(b.get('date'))
-            if booking_date == view_date:
-                daily_bookings.append({
-                    'Room': b['room'],
-                    'Start': datetime.datetime.combine(view_date, datetime.time.fromisoformat(b.get('start_time'))),
-                    'Finish': datetime.datetime.combine(view_date, datetime.time.fromisoformat(b.get('end_time'))),
-                    'User': b['user_id']
-                })
-        except Exception:
-            continue
+def display_availability_matrix():
+    """แสดงตารางสถานะห้องว่างแบบเรียลไทม์"""
+    st.subheader("🗓️ สถานะห้องว่างแบบตาราง")
     
-    if not daily_bookings:
-        st.info("💡 ไม่มีห้องถูกจองในวันที่เลือก", icon="💡")
-        return
-
-    df = pd.DataFrame(daily_bookings)
-    
-    df['Color'] = df['User']
-
-    fig = px.timeline(
-        df, 
-        x_start="Start", 
-        x_end="Finish", 
-        y="Room", 
-        color="User",
-        text="User",
-        color_discrete_sequence=px.colors.qualitative.Bold,
-        title=f"การจองห้องประชุมวันที่ {view_date.strftime('%Y-%m-%d')}"
+    view_date = st.date_input(
+        "เลือกวันที่เพื่อดูสถานะห้องว่าง", 
+        value=datetime.date.today(),
+        key="view_date_select"
     )
 
-    fig.update_yaxes(autorange="reversed") 
-    fig.update_layout(xaxis_title="เวลา", yaxis_title="ห้องประชุม", legend_title="ผู้จอง")
-    fig.update_traces(opacity=0.8, textposition='inside')
+    current_bookings = load_bookings_from_db()
 
-    time_start = datetime.datetime.combine(view_date, minutes_to_time(0))
-    time_end = datetime.datetime.combine(view_date, minutes_to_time(TOTAL_MINUTES))
-    fig.update_xaxes(range=[time_start, time_end]) # แก้ไขเพื่อไม่ให้เกิด SyntaxError
+    if not current_bookings:
+        st.info(f"💡 ห้องทั้งหมดว่างในวันที่ {view_date.strftime('%Y-%m-%d')}.", icon="💡")
+        return
 
-    st.plotly_chart(fig, use_container_width=True)
+    daily_bookings = []
+    for b in current_bookings:
+        booking_date = datetime.date.fromisoformat(b.get('date'))
+        if booking_date == view_date:
+            daily_bookings.append(b)
+
+    # สร้างตารางสถานะห้องว่าง (30 นาทีต่อช่วง)
+    time_index = []
+    start_hour = 8
+    end_hour = 17
+    
+    for h in range(start_hour, end_hour):
+        time_index.append(f"{h:02d}:00")
+        time_index.append(f"{h:02d}:30")
+    
+    availability_df = pd.DataFrame(index=time_index, columns=list(ROOMS.keys())).fillna("✅ Available")
+    
+    for booking in daily_bookings:
+        room = booking['room']
+        
+        book_start_time = datetime.time.fromisoformat(booking.get('start_time'))
+        book_end_time = datetime.time.fromisoformat(booking.get('end_time'))
+
+        book_start_dt = datetime.datetime.combine(view_date, book_start_time)
+        book_end_dt = datetime.datetime.combine(view_date, book_end_time)
+        
+        for slot_time_str in time_index:
+            slot_time = datetime.datetime.strptime(slot_time_str, "%H:%M").time()
+            slot_dt = datetime.datetime.combine(view_date, slot_time)
+            slot_end_dt = slot_dt + datetime.timedelta(minutes=30)
+
+            if slot_dt < book_end_dt and slot_end_dt > book_start_dt:
+                availability_df.loc[slot_time_str, room] = f"❌ Booked by {booking['user_id']}"
+
+    def color_cells(val):
+        if "Available" in str(val):
+            return 'background-color: #d4edda; color: #155724'
+        else:
+            return 'background-color: #f8d7da; color: #721c24'
+
+    st.dataframe(
+        availability_df.style.applymap(color_cells), 
+        use_container_width=True
+    )
 
 
 def display_booking_form():
     """แสดงฟอร์มสำหรับสร้างการจองใหม่"""
     st.subheader("📝 สร้างการจองใหม่")
 
-    # Time Slider Configuration (แก้ไขให้ใช้ max_value)
+    # Time Slider Configuration
     min_minutes = 0
-    max_minutes = TOTAL_MINUTES 
+    max_minutes_value = TOTAL_MINUTES 
     default_start_minutes = START_HOUR * 60 + 60 
     default_end_minutes = default_start_minutes + 60 
 
@@ -462,7 +475,7 @@ def display_booking_form():
         time_range = st.slider(
             "3. เลือกช่วงเวลา (10 นาทีต่อก้าว)",
             min_value=min_minutes,
-            max_value=max_minutes, # <--- ใช้ max_value
+            max_value=max_minutes_value, # แก้ไข TypeError
             value=(default_start_minutes, default_end_minutes),
             step=10,
             format_func=lambda minutes: minutes_to_time(minutes).strftime('%H:%M'),
@@ -557,6 +570,23 @@ def display_data_and_export():
 
 
 # --- Main Application Layout ---
+# 🛑 ฟังก์ชันนี้ทำหน้าที่เริ่มต้น state และถูกเรียกโดย if __name__ == "__main__":
+def initialize_state():
+    """ฟังก์ชันเริ่มต้น Session State และการเชื่อมต่อ DB"""
+    # 1. เรียกฟังก์ชันเชื่อมต่อ DB ก่อน (จะตั้งค่า db_ready)
+    init_database_connection()
+    
+    # 2. ตั้งค่า Session State ที่จำเป็น (ถ้ายังไม่มี)
+    if 'rooms' not in st.session_state:
+        st.session_state.rooms = ROOMS
+    if 'authenticated_user' not in st.session_state:
+        st.session_state.authenticated_user = None
+    if 'user_role' not in st.session_state:
+        st.session_state.user_role = None
+    if 'mode' not in st.session_state:
+        st.session_state.mode = 'login'
+
+
 def main():
     """ฟังก์ชันหลักสำหรับรันแอปพลิเคชัน Streamlit"""
     st.set_page_config(
@@ -569,14 +599,12 @@ def main():
     st.title("ISE Meeting Room Scheduler 🏢 (Feature Complete)")
     st.info("💡 แอปพลิเคชันนี้เชื่อมต่อกับฐานข้อมูล Firestore แล้ว หากมีการตั้งค่า Secrets ถูกต้อง ข้อมูลจะถูกบันทึกอย่างถาวร")
     
+    # 🛑 เรียกใช้ initialize_state ก่อนส่วนอื่น
     initialize_state()
     
     if st.session_state.authenticated_user:
         display_profile_card()
     else:
-        if 'mode' not in st.session_state:
-             st.session_state.mode = 'login'
-
         if st.session_state.mode == 'login':
             display_login_form()
         elif st.session_state.mode == 'signup':
@@ -586,14 +614,8 @@ def main():
         st.error("⛔ ไม่สามารถใช้งานได้: การเชื่อมต่อฐานข้อมูลล้มเหลว", icon="🚨")
         return
 
-    view_date = st.date_input(
-        "เลือกวันที่เพื่อดูสถานะห้องว่าง (Chart View)", 
-        value=datetime.date.today(),
-        key="chart_view_date"
-    )
-
-    current_bookings = load_bookings_from_db()
-    display_availability_chart(current_bookings, view_date)
+    # 🛑 แสดงตารางสถานะห้องว่าง (แทน Plotly)
+    display_availability_matrix()
 
     st.markdown("---")
 
