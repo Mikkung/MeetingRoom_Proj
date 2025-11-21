@@ -319,24 +319,10 @@ def display_profile_card():
     ), use_container_width=True)
 
 
-def authenticate_user():
-    """จัดการกระบวนการล็อกอิน/ยืนยันตัวตนของผู้ใช้"""
-    st.sidebar.subheader("🔒 เข้าสู่ระบบ (Production)")
-    
-    if st.session_state.authenticated_user:
-        current_users = load_users_from_db() 
-        current_role = current_users[st.session_state.authenticated_user]['role']
-        role_thai = "ผู้ดูแลระบบ" if current_role == 'admin' else "ผู้ใช้งานทั่วไป"
-        st.sidebar.success(f"เข้าสู่ระบบในชื่อ: **{st.session_state.authenticated_user}** ({role_thai})")
-        if st.sidebar.button("ออกจากระบบ", key="logout_btn", use_container_width=True):
-            st.session_state.authenticated_user = None
-            st.session_state.user_role = None
-            load_bookings_from_db.clear()
-            load_users_from_db.clear()
-            st.rerun()
-        return True
-    
+def display_login_form():
+    """ฟอร์มสำหรับ Login"""
     current_users = load_users_from_db() 
+    st.sidebar.subheader("🔒 เข้าสู่ระบบ")
 
     with st.sidebar.form(key='login_form'):
         username = st.text_input("ชื่อผู้ใช้ (Username)", key="login_username_input")
@@ -361,7 +347,7 @@ def authenticate_user():
                 else:
                     if username == "admin.user" and password == 'p789':
                          is_correct = True
-                    elif stored_hash_str.startswith("MOCK_HASH_FOR_"): # For mock signed-up users
+                    elif stored_hash_str == "MOCK_HASH_FOR_" + username:
                          is_correct = True
 
                 if is_correct:
@@ -378,12 +364,6 @@ def authenticate_user():
     if st.sidebar.button("สมัครสมาชิกใหม่", key="signup_toggle"):
         st.session_state.mode = 'signup'
         st.rerun()
-    return False
-
-
-def display_login_form():
-    """Wrapper function for login form (for modularity)"""
-    return authenticate_user()
 
 
 def display_signup_form():
@@ -405,6 +385,31 @@ def display_signup_form():
     if st.sidebar.button("กลับสู่หน้าเข้าสู่ระบบ", key="login_toggle"):
         st.session_state.mode = 'login'
         st.rerun()
+
+
+# --- Display Helpers ---
+
+def convert_df_to_csv(df):
+    """แปลง Pandas DataFrame เป็น CSV สำหรับดาวน์โหลด"""
+    df_export = df.copy()
+    
+    df_export['Date'] = df_export['date'].astype(str)
+    df_export['StartTime'] = df_export['start_time'].astype(str)
+    df_export['EndTime'] = df_export['end_time'].astype(str)
+    
+    columns_to_keep = ['room', 'Date', 'StartTime', 'EndTime', 'user_id', 'user_email']
+    df_export = df_export[[col for col in columns_to_keep if col in df_export.columns]]
+
+    df_export = df_export.rename(columns={
+        'room': 'Room',
+        'user_id': 'Username',
+        'user_email': 'Email'
+    })
+
+    output = io.StringIO()
+    df_export.to_csv(output, index=False, encoding='utf-8')
+    processed_data = output.getvalue().encode('utf-8')
+    return processed_data
 
 
 def display_availability_matrix():
@@ -522,7 +527,7 @@ def display_booking_form():
 
 
 def display_data_and_export():
-    """แสดงรายการห้องและการจองปัจจุบัน พร้อมปุ่ม export ที่จำกัดสิทธิ์ตามบทบาท"""
+    """แสดงรายการห้องและการจองปัจจุบัน พร้อมปุ่ม export และ Cancel"""
     
     st.subheader("🏢 รายละเอียดห้องประชุม")
     
@@ -561,10 +566,10 @@ def display_data_and_export():
             
             if cancellable_bookings:
                 options, doc_ids = zip(*cancellable_bookings)
-                selected_booking_id = st.selectbox("เลือกรายการจองที่ต้องการยกเลิก", options, key="cancel_select")
+                selected_booking_id_str = st.selectbox("เลือกรายการจองที่ต้องการยกเลิก", options, key="cancel_select")
                 
                 if st.button("ยืนยันการยกเลิก", key="cancel_button", type="secondary"):
-                    selected_doc_id = doc_ids[options.index(selected_booking_id)]
+                    selected_doc_id = doc_ids[options.index(selected_booking_id_str)]
                     delete_booking_from_db(selected_doc_id)
             else:
                 st.info("คุณไม่มีสิทธิ์ยกเลิกการจองในขณะนี้", icon="🔒")
@@ -611,13 +616,16 @@ def main():
     )
 
     st.title("ISE Meeting Room Scheduler 🏢 (Feature Complete)")
-    st.info("💡 แอปพลิเคชันนี้เชื่อมต่อกับฐานข้อมูล Firestore แล้ว")
+    st.info("💡 แอปพลิเคชันนี้เชื่อมต่อกับฐานข้อมูล Firestore แล้ว หากมีการตั้งค่า Secrets ถูกต้อง ข้อมูลจะถูกบันทึกอย่างถาวร")
     
     initialize_state()
     
     if st.session_state.authenticated_user:
         display_profile_card()
     else:
+        if 'mode' not in st.session_state:
+             st.session_state.mode = 'login'
+
         if st.session_state.mode == 'login':
             display_login_form()
         elif st.session_state.mode == 'signup':
