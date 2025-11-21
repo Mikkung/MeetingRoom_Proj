@@ -186,7 +186,23 @@ def save_new_user_to_db(username, email, hashed_password):
         return False
 
 
-# --- Core Logic: Conflict Check ---
+# --- State Management and Conflict Check ---
+
+def initialize_state():
+    """
+    ฟังก์ชันที่รวมการเริ่มต้น Session State และการเชื่อมต่อ DB
+    แก้ไข NameError โดยการรวมการเริ่มต้นตัวแปรทั้งหมดไว้ที่นี่
+    """
+    if 'rooms' not in st.session_state:
+        st.session_state.rooms = ROOMS
+    if 'authenticated_user' not in st.session_state:
+        st.session_state.authenticated_user = None
+    if 'user_role' not in st.session_state:
+        st.session_state.user_role = None
+
+    # เรียกใช้ฟังก์ชันเชื่อมต่อฐานข้อมูล
+    init_database_connection()
+
 
 def is_conflict(new_booking, current_bookings):
     """ตรวจสอบความขัดแย้งของการจอง"""
@@ -217,6 +233,7 @@ def is_conflict(new_booking, current_bookings):
 
 
 # --- Callback function for Form Submission ---
+
 def handle_booking_submission(room_name, booking_date, start_time, end_time):
     """ประมวลผลข้อมูลฟอร์มและพยายามสร้างการจองใหม่"""
     
@@ -471,7 +488,7 @@ def display_booking_form():
         time_range = st.slider(
             "3. เลือกช่วงเวลา (10 นาทีต่อก้าว)",
             min_value=min_minutes,
-            max_value=max_minutes,
+            max_minutes=max_minutes,
             value=(default_start_minutes, default_end_minutes),
             step=10,
             format='%H:%M',
@@ -602,6 +619,7 @@ def main():
     st.title("ISE Meeting Room Scheduler 🏢 (Stable Version)")
     st.info("💡 แอปพลิเคชันนี้เชื่อมต่อกับฐานข้อมูล Firestore แล้ว")
     
+    # แก้ไข NameError โดยการรวม initialize_state() ไว้ใน main()
     initialize_state()
     
     if st.session_state.authenticated_user:
