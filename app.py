@@ -60,21 +60,20 @@ def init_database_connection():
 # 🛑 B: **PLACEHOLDER FOR LOADING DATA FROM DB**
 @st.cache_data(ttl=60) # Caching is essential to avoid hitting DB limits too often
 def load_bookings_from_db():
-    """โหลดข้อมูลการจองทั้งหมดจาก Firestore"""
-    # ในการใช้งานจริง: Q = db_client.collection("bookings").stream()
-    # bookings = [doc.to_dict() for doc in Q]
-    
-    # สำหรับโค้ดตัวอย่างนี้ เราจะโหลดจาก Session State (หน่วยความจำชั่วคราว)
-    # เพื่อให้โค้ดยังคงทำงานได้จนกว่าจะมีการเชื่อมต่อ DB จริง
-    return st.session_state.in_memory_bookings
+    if not st.session_state.db_ready():
+        return []
+    docs = st.session_state.db.collection("bookings").stream()
+    bookings = [doc.to_dict() for doc in docs]
+    return bookings
 
 # 🛑 C: **PLACEHOLDER FOR SAVING DATA TO DB**
 def save_booking_to_db(new_booking):
     """บันทึกการจองใหม่ไปยัง Firestore"""
     # ในการใช้งานจริง: db_client.collection("bookings").add(new_booking)
-    
+    if not st.session_state.db_ready:
+        return
     # สำหรับโค้ดตัวอย่างนี้ เราจะบันทึกใน Session State
-    st.session_state.in_memory_bookings.append(new_booking)
+    st.session_state.db.collection("bookings").add(new_booking)
     # Clear cache to force reload of data from the 'DB' (in-memory)
     load_bookings_from_db.clear() 
 
@@ -471,4 +470,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
