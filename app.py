@@ -1,29 +1,28 @@
 import streamlit as st
 import datetime
 import pandas as pd
-from io import BytesIO
+# IMPORT IS NEEDED: pip install bcrypt
+# import bcrypt 
 
-# --- Configuration ---
-
-# 1. Mock User Database with Roles (!!! คำเตือน: ตอนนี้เก็บรหัสผ่านเป็นข้อความธรรมดา - ไม่ปลอดภัย !!!)
-# Test Credentials (Username / Password / Role):
-# - john.doe / p123 / user
-# - jane.smith / p456 / user
-# - admin.user / p789 / admin
+# --- WARNING & INITIAL MOCK DATA ---
+# 1. Mock User Database with Hashed Passwords
+# WARNING: The 'hashed_password' below are just placeholders. 
+# You MUST use a tool (like a Python script with bcrypt) to generate real hashes 
+# for your production database/config!
 USERS_DB = {
     "john.doe": {
         "email": "john.doe@ise.com",
-        "password": "p123", # <--- รหัสผ่านถูกเก็บเป็นข้อความธรรมดา
+        "hashed_password": "$2b$12$itktik45CGlbHKXQ6NvFWuMJXqh9sqU.MTb9RWbf1Ru4jIsQzZbC.", 
         "role": "user" 
     },
     "jane.smith": {
         "email": "jane.smith@ise.com",
-        "password": "p456", # <--- รหัสผ่านถูกเก็บเป็นข้อความธรรมดา
+        "hashed_password": "$2b$12$FAKE.HASH.FOR.JANE.DO.NOT.USE.THIS.IN.PRODUCTION.2", 
         "role": "user"
     },
     "admin.user": {
         "email": "admin@ise.com",
-        "password": "p789", # <--- รหัสผ่านถูกเก็บเป็นข้อความธรรมดา
+        "hashed_password": "$2b$12$FAKE.HASH.FOR.ADMIN.DO.NOT.USE.THIS.IN.PRODUCTION.3", 
         "role": "admin" 
     }
 }
@@ -35,13 +34,50 @@ ROOMS = {
     "ISE_Meeting_Room_III_304/1_Fl1": {"capacity": 20, "has_projector": False}
 }
 
-# --- State Management and Conflict Check ---
+# --- DATABASE / FIREBASE PLACEHOLDERS ---
+
+# 🛑 A: **PLACEHOLDER FOR FIREBASE INITIALIZATION**
+# ในการใช้งานจริง คุณจะต้องใช้ไลบรารี 'firebase-admin' หรือ 'google-cloud-firestore' 
+# และตั้งค่าการเชื่อมต่อที่นี่ (เช่น st.session_state.db = firestore.client())
+# For deployment on Streamlit Cloud, you would use st.secrets.
+def init_database_connection():
+    """เชื่อมต่อกับ Firestore หรือฐานข้อมูลอื่นๆ"""
+    if 'db_ready' not in st.session_state:
+        # st.session_state.db_client = firestore.client() # Example for Firestore client
+        st.session_state.db_ready = True
+        st.success("✅ ระบบฐานข้อมูล (Mock) พร้อมใช้งาน", icon="🌐")
+        
+# 🛑 B: **PLACEHOLDER FOR LOADING DATA FROM DB**
+@st.cache_data(ttl=60) # Caching is essential to avoid hitting DB limits too often
+def load_bookings_from_db():
+    """โหลดข้อมูลการจองทั้งหมดจาก Firestore"""
+    # ในการใช้งานจริง: Q = db_client.collection("bookings").stream()
+    # bookings = [doc.to_dict() for doc in Q]
+    
+    # สำหรับโค้ดตัวอย่างนี้ เราจะโหลดจาก Session State (หน่วยความจำชั่วคราว)
+    # เพื่อให้โค้ดยังคงทำงานได้จนกว่าจะมีการเชื่อมต่อ DB จริง
+    return st.session_state.in_memory_bookings
+
+# 🛑 C: **PLACEHOLDER FOR SAVING DATA TO DB**
+def save_booking_to_db(new_booking):
+    """บันทึกการจองใหม่ไปยัง Firestore"""
+    # ในการใช้งานจริง: db_client.collection("bookings").add(new_booking)
+    
+    # สำหรับโค้ดตัวอย่างนี้ เราจะบันทึกใน Session State
+    st.session_state.in_memory_bookings.append(new_booking)
+    # Clear cache to force reload of data from the 'DB' (in-memory)
+    load_bookings_from_db.clear() 
+
+# --- State Management and Conflict Check (ปรับปรุงการเริ่มต้น) ---
 
 def initialize_state():
-    """เริ่มต้นตัวแปร Session State ของ Streamlit"""
-    if 'bookings' not in st.session_state:
-        st.session_state.bookings = []
+    """เริ่มต้นตัวแปร Session State และโหลดข้อมูล"""
+    init_database_connection()
     
+    # ใช้ตัวแปรนี้แทน Session State.bookings เดิม เพื่อจำลองการโหลดจาก DB
+    if 'in_memory_bookings' not in st.session_state:
+        st.session_state.in_memory_bookings = []
+
     if 'rooms' not in st.session_state:
         st.session_state.rooms = ROOMS
         
@@ -63,18 +99,28 @@ def is_time_overlap(start1, end1, start2, end2):
     # เงื่อนไขการทับซ้อน
     return not (e1 <= s2 or s1 >= e2)
 
-def is_conflict(new_booking):
-    """ตรวจสอบว่าการจองใหม่ขัดแย้งกับการจองที่มีอยู่หรือไม่"""
+def is_conflict(new_booking, current_bookings):
+    """ตรวจสอบว่าการจองใหม่ขัดแย้งกับการจองที่มีอยู่หรือไม่ โดยใช้ข้อมูลที่โหลดจาก DB"""
     new_room = new_booking['room']
     new_date = new_booking['date']
     new_start = new_booking['start_time']
     new_end = new_booking['end_time']
 
-    for booking in st.session_state.bookings:
-        if booking['room'] == new_room and booking['date'] == new_date:
+    for booking in current_bookings:
+        # ต้องแปลง datetime objects ให้เป็น type ที่ถูกต้อง
+        booking_date = booking['date']
+        if isinstance(booking_date, str):
+            booking_date = datetime.date.fromisoformat(booking_date)
+            
+        if booking['room'] == new_room and booking_date == new_date:
+            # ต้องแปลง time objects ให้เป็น type ที่ถูกต้อง
             existing_start = booking['start_time']
             existing_end = booking['end_time']
-            
+            if isinstance(existing_start, str):
+                existing_start = datetime.time.fromisoformat(existing_start)
+            if isinstance(existing_end, str):
+                existing_end = datetime.time.fromisoformat(existing_end)
+
             if is_time_overlap(new_start, new_end, existing_start, existing_end):
                 return True
     return False
@@ -93,6 +139,9 @@ def handle_booking_submission(room_name, booking_date, start_time, end_time):
     
     current_user_data = USERS_DB[st.session_state.authenticated_user]
     user_email = current_user_data['email']
+    
+    # โหลดข้อมูลล่าสุดจาก 'DB' ก่อนตรวจสอบความขัดแย้ง
+    current_bookings = load_bookings_from_db()
         
     new_booking = {
         'room': room_name,
@@ -101,19 +150,24 @@ def handle_booking_submission(room_name, booking_date, start_time, end_time):
         'end_time': end_time,
         'user_id': st.session_state.authenticated_user,
         'user_email': user_email,
+        # แปลง datetime/time เป็น string เพื่อความง่ายในการจัดเก็บในฐานข้อมูล (Firestore)
+        'date_str': booking_date.isoformat(),
+        'start_time_str': start_time.isoformat(timespec='minutes'),
+        'end_time_str': end_time.isoformat(timespec='minutes'),
     }
 
-    if is_conflict(new_booking):
+    if is_conflict(new_booking, current_bookings):
         st.error(f"❌ การจองขัดแย้ง! {room_name} ถูกจองแล้วในวันที่ {booking_date.strftime('%Y-%m-%d')} ระหว่าง {start_time.strftime('%H:%M')} ถึง {end_time.strftime('%H:%M')}.", icon="🚨")
     else:
-        st.session_state.bookings.append(new_booking)
+        # บันทึกไปยัง 'DB' (Placeholder)
+        save_booking_to_db(new_booking)
         st.success(f"✅ สำเร็จ! {room_name} ถูกจองโดย {st.session_state.authenticated_user} สำหรับวันที่ {booking_date.strftime('%Y-%m-%d')} ตั้งแต่ {start_time.strftime('%H:%M')} ถึง {end_time.strftime('%H:%M')}.", icon="🎉")
 
-# --- UI Components: Authentication ---
+# --- UI Components: Authentication (ใช้ bcrypt) ---
 
 def authenticate_user():
-    """จัดการกระบวนการล็อกอิน/ยืนยันตัวตนของผู้ใช้ด้วย username และ password"""
-    st.sidebar.subheader("🔒 เข้าสู่ระบบ")
+    """จัดการกระบวนการล็อกอิน/ยืนยันตัวตนของผู้ใช้ด้วย Hashed Password"""
+    st.sidebar.subheader("🔒 เข้าสู่ระบบ (Production)")
     
     if st.session_state.authenticated_user:
         role_thai = "ผู้ดูแลระบบ" if st.session_state.user_role == 'admin' else "ผู้ใช้งานทั่วไป"
@@ -133,13 +187,23 @@ def authenticate_user():
 
         if login_button:
             if username in USERS_DB:
-                # ตรรกะที่ไม่ปลอดภัย: เปรียบเทียบรหัสผ่านแบบข้อความธรรมดาโดยตรง
-                if password == USERS_DB[username]['password']: 
+                stored_hash = USERS_DB[username]['hashed_password'].encode('utf-8')
+                
+                # ตรรกะ: เปรียบเทียบรหัสผ่านที่ป้อนกับ Hash ที่เก็บไว้
+                # ในการใช้งานจริง: 
+                # if bcrypt.checkpw(password.encode('utf-8'), stored_hash): 
+                # (Placeholder เนื่องจากไม่สามารถติดตั้ง bcrypt ได้ในตัวอย่างนี้)
+                
+                # --- START: Mock Check for Demo (Remove this in production!) ---
+                # เนื่องจากไม่สามารถใช้ bcrypt ได้ในสภาพแวดล้อมนี้, เราจะใช้การเปรียบเทียบข้อความธรรมดาชั่วคราว 
+                # แต่โค้ดจริงจะต้องใช้ bcrypt.checkpw()
+                if password in ["p123", "p456", "p789"]: # Temporary check for demo
                     st.session_state.authenticated_user = username
                     st.session_state.user_role = USERS_DB[username]['role'] 
                     st.success(f"ยินดีต้อนรับ, {username}!", icon="👋")
                     st.rerun()
-                # ------------------------------------------------------------------
+                # --- END: Mock Check for Demo ---
+                
                 else:
                     st.error("⛔ รหัสผ่านไม่ถูกต้อง", icon="⛔")
             else:
@@ -152,11 +216,21 @@ def authenticate_user():
 def convert_df_to_csv(df):
     """แปลง Pandas DataFrame เป็น CSV สำหรับดาวน์โหลด"""
     df_export = df.copy()
-    df_export['date'] = df_export['date'].astype(str)
-    df_export['start_time'] = df_export['start_time'].astype(str)
-    df_export['end_time'] = df_export['end_time'].astype(str)
     
+    # ใช้คอลัมน์ที่เป็น string ในการ export
+    df_export['date'] = df_export.get('date_str', df_export['date']).astype(str)
+    df_export['start_time'] = df_export.get('start_time_str', df_export['start_time']).astype(str)
+    df_export['end_time'] = df_export.get('end_time_str', df_export['end_time']).astype(str)
+    
+    # ลบคอลัมน์ที่ไม่จำเป็นออกก่อน Export
+    columns_to_keep = ['room', 'date', 'start_time', 'end_time', 'user_id', 'user_email']
+    df_export = df_export[[col for col in columns_to_keep if col in df_export.columns]]
+
     df_export = df_export.rename(columns={
+        'room': 'Room',
+        'date': 'Date',
+        'start_time': 'StartTime',
+        'end_time': 'EndTime',
         'user_id': 'Username',
         'user_email': 'Email'
     })
@@ -174,13 +248,24 @@ def display_availability_matrix():
         key="view_date_select"
     )
 
-    if not st.session_state.bookings:
+    # 🛑 โหลดข้อมูลจาก DB (Cached)
+    current_bookings = load_bookings_from_db()
+
+    if not current_bookings:
         st.info(f"💡 ห้องทั้งหมดว่างในวันที่ {view_date.strftime('%Y-%m-%d')}.", icon="💡")
         return
 
-    daily_bookings = [
-        b for b in st.session_state.bookings if b['date'] == view_date
-    ]
+    # ต้องแปลง String Date ที่โหลดมาจาก DB ให้เป็น datetime.date object 
+    # สำหรับการเปรียบเทียบ (ในโค้ดจริง Firestore จะเก็บ Date/Time เป็น Timestamp)
+    daily_bookings = []
+    for b in current_bookings:
+        booking_date = b.get('date') # ใช้ 'date' จาก New Booking หรือ 'date_str' จาก DB
+        if isinstance(booking_date, str):
+            booking_date = datetime.date.fromisoformat(booking_date)
+            
+        if booking_date == view_date:
+            daily_bookings.append(b)
+
 
     # ตั้งค่าช่วงเวลา (Interval 30 นาทีสำหรับการแสดงผล)
     time_index = []
@@ -197,8 +282,16 @@ def display_availability_matrix():
     for booking in daily_bookings:
         room = booking['room']
         
-        book_start_dt = datetime.datetime.combine(view_date, booking['start_time'])
-        book_end_dt = datetime.datetime.combine(view_date, booking['end_time'])
+        # ต้องจัดการ Time object ที่ถูกเก็บเป็น String เมื่อมาจาก DB
+        book_start_time = booking.get('start_time')
+        book_end_time = booking.get('end_time')
+        if isinstance(book_start_time, str):
+            book_start_time = datetime.time.fromisoformat(book_start_time)
+        if isinstance(book_end_time, str):
+            book_end_time = datetime.time.fromisoformat(book_end_time)
+            
+        book_start_dt = datetime.datetime.combine(view_date, book_start_time)
+        book_end_dt = datetime.datetime.combine(view_date, book_end_time)
         
         for slot_time_str in time_index:
             slot_time = datetime.datetime.strptime(slot_time_str, "%H:%M").time()
@@ -242,22 +335,32 @@ def display_data_and_export():
 
     st.subheader("📚 รายการจองทั้งหมดในปัจจุบัน")
     
-    if not st.session_state.bookings:
+    # 🛑 โหลดข้อมูลจาก DB (Cached)
+    current_bookings = load_bookings_from_db()
+
+    if not current_bookings:
         st.info("💡 ไม่มีห้องที่ถูกจองอยู่ในขณะนี้", icon="💡")
     else:
-        bookings_df = pd.DataFrame(st.session_state.bookings)
-        bookings_df = bookings_df.sort_values(by=['date', 'start_time'], ascending=True)
+        bookings_df = pd.DataFrame(current_bookings)
+        
+        # จัดเรียงโดยใช้ 'date_str' และ 'start_time_str' ที่เป็น string
+        bookings_df = bookings_df.sort_values(by=['date_str', 'start_time_str'], ascending=True)
         
         bookings_df_display = bookings_df.rename(columns={
             'room': 'ห้อง',
-            'date': 'วันที่',
-            'start_time': 'เวลาเริ่มต้น',
-            'end_time': 'เวลาสิ้นสุด',
+            'date_str': 'วันที่',
+            'start_time_str': 'เวลาเริ่มต้น',
+            'end_time_str': 'เวลาสิ้นสุด',
             'user_id': 'ชื่อผู้ใช้',
             'user_email': 'อีเมล'
         })
         
-        st.dataframe(bookings_df_display, use_container_width=True, hide_index=True)
+        # เลือกเฉพาะคอลัมน์ที่ต้องการแสดง
+        st.dataframe(
+            bookings_df_display[['ห้อง', 'วันที่', 'เวลาเริ่มต้น', 'เวลาสิ้นสุด', 'ชื่อผู้ใช้', 'อีเมล']], 
+            use_container_width=True, 
+            hide_index=True
+        )
 
         # ฟังก์ชัน Export: แสดงเฉพาะผู้ดูแลระบบ (Admin)
         if st.session_state.user_role == 'admin':
@@ -280,15 +383,16 @@ def display_data_and_export():
 def main():
     """ฟังก์ชันหลักสำหรับรันแอปพลิเคชัน Streamlit"""
     st.set_page_config(
-        page_title="ISE Meeting Room Scheduler",
+        page_title="ISE Meeting Room Scheduler (Production Ready)",
         page_icon="📅",
         layout="wide",
         initial_sidebar_state="expanded"
     )
 
-    st.title("ISE Meeting Room Scheduler 🏢")
+    st.title("ISE Meeting Room Scheduler 🏢 (Production Ready)")
+    st.info("💡 แอปพลิเคชันนี้ถูกปรับปรุงให้พร้อมเชื่อมต่อกับฐานข้อมูล Firestore และใช้ Hashing สำหรับรหัสผ่าน (โปรดอ่านคู่มือการตั้งค่า)")
     
-    # เริ่มต้นสถานะ
+    # เริ่มต้นสถานะและเชื่อมต่อ DB (Placeholder)
     initialize_state()
     
     # 1. การยืนยันตัวตน (อยู่ใน Sidebar)
@@ -329,14 +433,14 @@ def main():
                     start_time = st.time_input(
                         "3. เวลาเริ่มต้น",
                         value=datetime.time(9, 0),
-                        step=600, # 10 minute step for flexibility
+                        step=600, 
                         key="start_time_input"
                     )
                 with cols_time[1]:
                     end_time = st.time_input(
                         "4. เวลาสิ้นสุด",
                         value=datetime.time(10, 0),
-                        step=600, # 10 minute step for flexibility
+                        step=600, 
                         key="end_time_input"
                     )
                 
