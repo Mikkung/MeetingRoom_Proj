@@ -487,10 +487,9 @@ def display_booking_form():
         time_range = st.slider(
             "3. เลือกช่วงเวลา (10 นาทีต่อก้าว)",
             min_value=min_minutes,
-            max_minutes=max_minutes,
+            max_value=max_minutes, # แก้ไข: เปลี่ยน max_minutes เป็น max_value
             value=(default_start_minutes, default_end_minutes),
             step=10,
-            # 🛑 นำ format ออกเพื่อแก้ TypeError
             key="time_range_slider",
             label_visibility="visible"
         )
