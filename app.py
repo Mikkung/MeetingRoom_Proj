@@ -38,7 +38,7 @@ MOCK_USER_FALLBACK = {
 ROOMS = {
     "ISE_Meeting_Room_I_305_Fl1": {"capacity": 8, "has_projector": True},
     "ISE_Meeting_Room_II_Fl2": {"capacity": 20, "has_projector": True},
-    "ISE_Meeting_Room_III_304/1_Fl1": {"capacity": 20, "has_projector": False}
+    "ISE_Meeting_Room_III_304/1_Fl1": {"capacity": 20, "has_projector": True}
 }
 
 
@@ -497,4 +497,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
