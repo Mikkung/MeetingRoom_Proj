@@ -6,16 +6,13 @@ import io
 import plotly.express as px
 # ต้องติดตั้ง: pip install firebase-admin bcrypt plotly
 
-# 🛑 ต้องใช้ try-except เนื่องจาก Streamlit Cloud อาจไม่ให้ติดตั้ง bcrypt ได้ง่ายๆ
+# 🛑 ตรวจสอบการติดตั้งไลบรารีที่ซับซ้อน
 try:
     import bcrypt
     bcrypt_installed = True
 except ImportError:
     bcrypt_installed = False
-    st.warning("⚠️ ไม่พบไลบรารี 'bcrypt' การตรวจสอบรหัสผ่าน/Sign Up จะทำงานใน Mock Mode", icon="🚨")
 
-
-# 🛑 นำเข้าไลบรารี Firebase
 try:
     from firebase_admin import credentials, firestore, initialize_app, get_app
     from firebase_admin.exceptions import InvalidArgumentError
@@ -23,12 +20,17 @@ try:
 except ImportError:
     from firebase_admin import get_app
     firebase_installed = False
+
+if not firebase_installed:
     st.error("❌ ไม่พบไลบรารี 'firebase-admin' กรุณาติดตั้งเพื่อเชื่อมต่อ Firestore", icon="🚨")
+if not bcrypt_installed:
+    st.warning("⚠️ ไม่พบไลบรารี 'bcrypt' การตรวจสอบรหัสผ่าน/Sign Up จะทำงานใน Mock Mode", icon="🚨")
 
 
 # --- CONFIGURATION & MOCK FALLBACK ---
 
 # 1. Mock User Database (ใช้ Hash ที่คุณสร้างและจะอัปเดต)
+# ⚠️ ข้อมูลนี้ใช้เป็น Fallback เท่านั้น หาก Firestore Collection 'users' ว่างเปล่า
 MOCK_USER_FALLBACK = {
     "admin.user": {
         "email": "admin@ise.com",
@@ -66,6 +68,7 @@ def init_database_connection():
             return
             
         try:
+            # ป้องกันการเรียก initialize_app ซ้ำ
             try:
                 get_app()
             except ValueError:
@@ -81,7 +84,7 @@ def init_database_connection():
         except Exception as e:
             st.session_state.db_ready = False
             st.sidebar.error(f"❌ ข้อผิดพลาดในการเชื่อมต่อ Firestore: {e}", icon="🚨")
-            st.sidebar.error("💡 ตรวจสอบ: Key 'firestore_credentials' ใน Streamlit Secrets", icon="🛠️")
+            st.sidebar.error("💡 ตรวจสอบ: Key 'firestore_credentials' ใน Streamlit Secrets ว่าเป็น JSON ที่ถูกต้องหรือไม่", icon="🛠️")
 
 
 # 🛑 B1: LOADING USERS FROM DB
@@ -117,7 +120,6 @@ def load_bookings_from_db():
 
     try:
         docs = st.session_state.db.collection("bookings").stream()
-        # เก็บ Document ID ไว้ด้วยเพื่อใช้ในการลบ
         bookings = []
         for doc in docs:
             booking_data = doc.to_dict()
@@ -144,17 +146,17 @@ def save_booking_to_db(new_booking):
         st.error(f"❌ ข้อผิดพลาดในการบันทึกข้อมูลลง DB: {e}", icon="🚨")
         return False
 
-# 🛑 C2: DELETING BOOKING FROM DB (New Function)
+# 🛑 C2: DELETING BOOKING FROM DB
 def delete_booking_from_db(doc_id):
     """ลบเอกสารการจองจาก Firestore ด้วย Document ID"""
     if not st.session_state.db_ready:
         return False
     
-    # 🛑 doc_id จะถูกส่งมาในรูปแบบ 'Cancel-{doc_id}' จาก st.data_editor
+    # doc_id ถูกส่งมาในรูปแบบ 'Cancel-{doc_id}' จาก st.data_editor
     if doc_id.startswith("Cancel-"):
         actual_doc_id = doc_id.split("-", 1)[1]
     else:
-        actual_doc_id = doc_id # กรณีเรียกใช้ตรงๆ
+        actual_doc_id = doc_id 
     
     try:
         st.session_state.db.collection("bookings").document(actual_doc_id).delete()
@@ -165,7 +167,7 @@ def delete_booking_from_db(doc_id):
         st.error(f"❌ ข้อผิดพลาดในการลบการจอง: {e}", icon="🚨")
         return False
 
-# 🛑 C3: SAVING NEW USER TO DB (New Function for Sign Up)
+# 🛑 C3: SAVING NEW USER TO DB
 def save_new_user_to_db(username, email, hashed_password):
     """บันทึกผู้ใช้ใหม่ลงใน Collection 'users'"""
     if not st.session_state.db_ready:
@@ -177,7 +179,6 @@ def save_new_user_to_db(username, email, hashed_password):
             "hashed_password": hashed_password,
             "role": "user" # กำหนดบทบาทเริ่มต้นเป็น user
         }
-        # ใช้ username เป็น Document ID
         st.session_state.db.collection("users").document(username).set(user_data)
         load_users_from_db.clear() # Clear user cache
         return True
@@ -186,10 +187,33 @@ def save_new_user_to_db(username, email, hashed_password):
         return False
 
 
-# --- Core Logic: Conflict Check ---
+# --- State Management and Conflict Check ---
+
+def initialize_state():
+    """เริ่มต้นตัวแปร Session State และโหลดข้อมูล"""
+    if 'rooms' not in st.session_state:
+        st.session_state.rooms = ROOMS
+    if 'authenticated_user' not in st.session_state:
+        st.session_state.authenticated_user = None
+    if 'user_role' not in st.session_state:
+        st.session_state.user_role = None
+
+    init_database_connection() # เชื่อมต่อ DB
+
+
+def is_time_overlap(start1, end1, start2, end2):
+    """ตรวจสอบว่าช่วงเวลาสองช่วงทับซ้อนกันหรือไม่ (ใช้ datetime.time objects)"""
+    def time_to_seconds(t):
+        if t is None: return -1 
+        return t.hour * 3600 + t.minute * 60 + t.second
+    
+    s1, e1 = time_to_seconds(start1), time_to_seconds(end1)
+    s2, e2 = time_to_seconds(start2), time_to_seconds(end2)
+    
+    return not (e1 <= s2 or s1 >= e2)
 
 def is_conflict(new_booking, current_bookings):
-    """ตรวจสอบความขัดแย้งของการจอง"""
+    """ตรวจสอบว่าการจองใหม่ขัดแย้งกับการจองที่มีอยู่หรือไม่ โดยใช้ข้อมูลที่โหลดจาก DB"""
     new_room = new_booking['room']
     new_date_obj = new_booking['date_obj']
     new_start_obj = new_booking['start_time_obj']
@@ -204,14 +228,7 @@ def is_conflict(new_booking, current_bookings):
             continue
 
         if booking['room'] == new_room and booking_date == new_date_obj:
-            def time_to_seconds(t):
-                return t.hour * 3600 + t.minute * 60 + t.second
-            
-            s_new, e_new = time_to_seconds(new_start_obj), time_to_seconds(new_end_obj)
-            s_exist, e_exist = time_to_seconds(existing_start), time_to_seconds(existing_end)
-
-            # ตรวจสอบการทับซ้อน
-            if not (e_new <= s_exist or s_new >= e_exist):
+            if is_time_overlap(new_start_obj, new_end_obj, existing_start, existing_end):
                 return True
     return False
 
@@ -250,6 +267,7 @@ def handle_booking_submission(room_name, booking_date, start_time, end_time):
         if save_booking_to_db(new_booking):
             st.toast("✅ การจองสำเร็จ! ห้องของคุณถูกบันทึกแล้ว", icon="🎉")
 
+
 # --- UI Components: Authentication & Sign Up ---
 
 def handle_signup(username, email, password, confirm_password):
@@ -275,7 +293,6 @@ def handle_signup(username, email, password, confirm_password):
             st.toast("❌ ข้อผิดพลาดในการเข้ารหัสรหัสผ่าน (bcrypt)", icon="🚨")
             return
     else:
-        # Mock Check/Sign Up (เฉพาะในโหมดที่ไม่มี bcrypt)
         hashed_password = "MOCK_HASH_FOR_" + username
         if password != "signup":
             st.toast("⚠️ Mock Mode: ต้องใช้รหัสผ่าน 'signup' ในโหมดนี้เพื่อลงทะเบียน", icon="⚠️")
@@ -339,10 +356,9 @@ def display_login_form():
                     # 🛑 Mock Check (สำหรับ Admin P789 หรือ Mock User)
                     if username == "admin.user" and password == 'p789':
                          is_correct = True
-                    elif stored_hash_str == "MOCK_HASH_FOR_" + username:
-                         # For users created in mock signup mode
+                    elif stored_hash_str.startswith("MOCK_HASH_FOR_"):
                          is_correct = True
-
+                
                 if is_correct:
                     st.session_state.authenticated_user = username
                     st.session_state.user_role = current_users[username]['role'] 
@@ -381,6 +397,30 @@ def display_signup_form():
 
 
 # --- UI Components: Display & Export ---
+
+@st.cache_data
+def convert_df_to_csv(df):
+    """แปลง Pandas DataFrame เป็น CSV สำหรับดาวน์โหลด"""
+    df_export = df.copy()
+    
+    df_export['Date'] = df_export['date'].astype(str)
+    df_export['StartTime'] = df_export['start_time'].astype(str)
+    df_export['EndTime'] = df_export['end_time'].astype(str)
+    
+    columns_to_keep = ['room', 'Date', 'StartTime', 'EndTime', 'user_id', 'user_email']
+    df_export = df_export[[col for col in columns_to_keep if col in df_export.columns]]
+
+    df_export = df_export.rename(columns={
+        'room': 'Room',
+        'user_id': 'Username',
+        'user_email': 'Email'
+    })
+
+    output = io.StringIO()
+    df_export.to_csv(output, index=False, encoding='utf-8')
+    processed_data = output.getvalue().encode('utf-8')
+    return processed_data
+
 
 def display_availability_chart(bookings, view_date):
     """แสดงสถานะห้องว่างแบบ Graphical Calendar View (Plotly Gantt Chart)"""
@@ -543,6 +583,7 @@ def display_data_and_export():
         
 
         if current_role == 'admin':
+            bookings_df = pd.DataFrame(current_bookings)
             csv_data = convert_df_to_csv(bookings_df)
             st.download_button(
                 label="⬇️ ส่งออกข้อมูลการจองทั้งหมดเป็น CSV (สำหรับ Admin เท่านั้น)",
