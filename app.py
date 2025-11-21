@@ -52,7 +52,6 @@ def init_database_connection():
             return
             
         try:
-            # 🛑 1. ตรวจสอบว่าแอปพลิเคชัน Firebase ถูกเริ่มต้นไปแล้วหรือไม่
             try:
                 get_app()
                 app_initialized = True
@@ -60,14 +59,10 @@ def init_database_connection():
                 app_initialized = False
 
             if not app_initialized:
-                # 2. โหลด Credentials จาก st.secrets
                 key_dict = json.loads(st.secrets["firestore_credentials"])
-                
-                # 3. ยืนยันตัวตนและเริ่มต้น Firebase App (ถ้ายังไม่เริ่ม)
                 cred = credentials.Certificate(key_dict)
                 initialize_app(cred)
             
-            # 4. สร้าง Firestore Client (และเก็บไว้ใน Session State)
             st.session_state.db = firestore.client()
             st.session_state.db_ready = True
             st.sidebar.success("✅ เชื่อมต่อ Firestore สำเร็จ", icon="🌐")
@@ -87,7 +82,6 @@ def load_users_from_db():
 
     try:
         users = {}
-        # 🛑 Firestore Collection Name: 'users'
         docs = st.session_state.db.collection("users").stream()
         for doc in docs:
             user_data = doc.to_dict()
@@ -145,8 +139,7 @@ def initialize_state():
     if 'user_role' not in st.session_state:
         st.session_state.user_role = None
 
-    # เรียกใช้ฟังก์ชันเชื่อมต่อฐานข้อมูล
-    init_database_connection()
+    init_database_connection() # เชื่อมต่อ DB
 
 
 def is_time_overlap(start1, end1, start2, end2):
@@ -245,15 +238,21 @@ def authenticate_user():
 
         if login_button:
             if username in current_users:
-                stored_hash = current_users[username]['hashed_password'].encode('utf-8')
-                
+                stored_hash_str = current_users[username]['hashed_password']
                 is_correct = False
+                
                 if bcrypt_installed:
                     try:
-                        if bcrypt.checkpw(password.encode('utf-8'), stored_hash):
+                        stored_hash_bytes = stored_hash_str.encode('utf-8')
+                        password_bytes = password.encode('utf-8')
+                        
+                        # 🛑 ตรวจสอบรหัสผ่านกับ Hash ที่โหลดมาจาก DB
+                        if bcrypt.checkpw(password_bytes, stored_hash_bytes):
                             is_correct = True
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        # 🛑 ดักจับข้อผิดพลาดรันไทม์ (เช่น Hash string ไม่ถูกต้อง)
+                        st.error(f"❌ ข้อผิดพลาดในการตรวจสอบรหัสผ่าน: โปรดตรวจสอบค่า Hash ใน Firestore อีกครั้ง", icon="🛠️")
+                        st.stop() # หยุดการทำงานชั่วคราวเพื่อแสดง error
                 else:
                     # 🛑 Mock Check (ใช้รหัสผ่าน Plain Text สำหรับการทดสอบเมื่อไม่มี bcrypt)
                     if current_users[username].get('role') == 'admin' and password == 'p789':
@@ -497,5 +496,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
