@@ -458,6 +458,7 @@ def display_availability_chart(bookings, view_date):
         color_discrete_sequence=px.colors.qualitative.Bold,
         title=f"การจองห้องประชุมวันที่ {view_date.strftime('%Y-%m-%d')}"
     )
+    # 
 
     fig.update_yaxes(autorange="reversed") 
     fig.update_layout(xaxis_title="เวลา", yaxis_title="ห้องประชุม", legend_title="ผู้จอง")
@@ -465,7 +466,8 @@ def display_availability_chart(bookings, view_date):
 
     time_start = datetime.datetime.combine(view_date, minutes_to_time(0))
     time_end = datetime.datetime.combine(view_date, minutes_to_time(TOTAL_MINUTES))
-    fig.update_xaxes(range=[time_start, time_end], tickformat="%H:%M")
+    # 🛑 FIX: ลบ tickformat ที่มีสัญลักษณ์ % ออกเพื่อป้องกัน SyntaxError ของ Streamlit JS
+    fig.update_xaxes(range=[time_start, time_end]) 
 
     st.plotly_chart(fig, use_container_width=True)
 
@@ -581,7 +583,7 @@ def display_data_and_export():
             disabled=('ID', 'ห้อง', 'วันที่', 'เวลาเริ่มต้น', 'เวลาสิ้นสุด', 'ผู้จอง')
         )
         
-
+        # สำหรับ Download Button
         if current_role == 'admin':
             bookings_df = pd.DataFrame(current_bookings)
             csv_data = convert_df_to_csv(bookings_df)
