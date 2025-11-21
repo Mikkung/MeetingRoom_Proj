@@ -44,9 +44,19 @@ def init_database_connection():
     """เชื่อมต่อกับ Firestore หรือฐานข้อมูลอื่นๆ"""
     if 'db_ready' not in st.session_state:
         # st.session_state.db_client = firestore.client() # Example for Firestore client
-        st.session_state.db_ready = True
-        st.success("✅ ระบบฐานข้อมูล (Mock) พร้อมใช้งาน", icon="🌐")
-        
+        try:
+            # Load Credentials form st.secrets
+            key_dict = json.loads(st.secrets["firestore_credentials"])
+
+            cred = credentials.Certificate(key_dict)
+            initialize_app(cred)
+            st.session_state.db = firestore.client()
+            st.session_state.db_ready = True
+            st.success("✅ ระบบฐานข้อมูล (Mock) พร้อมใช้งาน", icon="🌐")
+        except Exception as e:
+            st.session_state.db_ready = False
+            st.sidebar.error(f"❌ ไม่สามารถเชื่อมต่อ Firestore ได้: {e}", icon="🚨")
+            
 # 🛑 B: **PLACEHOLDER FOR LOADING DATA FROM DB**
 @st.cache_data(ttl=60) # Caching is essential to avoid hitting DB limits too often
 def load_bookings_from_db():
@@ -461,3 +471,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
