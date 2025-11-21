@@ -459,8 +459,8 @@ def display_booking_form():
     """แสดงฟอร์มสำหรับสร้างการจองใหม่"""
     st.subheader("📝 สร้างการจองใหม่")
 
-    min_minutes = 0
-    max_minutes = TOTAL_MINUTES 
+    slider_min = 0
+    slider_max = TOTAL_MINUTES 
     default_start_minutes = START_HOUR * 60 + 60 
     default_end_minutes = default_start_minutes + 60 
 
@@ -486,11 +486,11 @@ def display_booking_form():
             
         time_range = st.slider(
             "3. เลือกช่วงเวลา (10 นาทีต่อก้าว)",
-            min_value=min_minutes,
-            max_value=max_minutes, # แก้ไข: เปลี่ยน max_minutes เป็น max_value
+            min_value=slider_min, # ใช้ตัวแปรที่ปลอดภัย
+            max_value=slider_max, # ใช้ตัวแปรที่ปลอดภัย
             value=(default_start_minutes, default_end_minutes),
             step=10,
-            # 🛑 เพิ่ม format_func เพื่อแสดงเวลาที่มนุษย์อ่านได้
+            # 🛑 ใช้ format_func เพื่อแสดงเวลาที่มนุษย์อ่านได้
             format_func=lambda minutes: minutes_to_time(minutes).strftime('%H:%M'), 
             key="time_range_slider",
             label_visibility="visible"
