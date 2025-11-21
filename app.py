@@ -25,7 +25,7 @@ except ImportError:
     st.error("❌ ไม่พบไลบรารี 'firebase-admin' กรุณาติดตั้งเพื่อเชื่อมต่อ Firestore", icon="🚨")
 
 
-# --- CONFIGURATION & MOCK FALLBACK ---
+# --- CONFIGURATION & UTILITIES ---
 
 # 1. Mock User Database (ใช้ Hash ที่คุณสร้างและจะอัปเดต)
 MOCK_USER_FALLBACK = {
@@ -43,8 +43,8 @@ ROOMS = {
     "ISE_Meeting_Room_III_304/1_Fl1": {"capacity": 20, "has_projector": True}
 }
 
-# 3. Time Slot Configuration (ใช้สำหรับ Slider: 8:00 ถึง 17:00, 540 นาที)
-TOTAL_MINUTES = 9 * 60 # 9 hours (8:00 to 17:00)
+# 3. Time Slot Configuration 
+TOTAL_MINUTES = 9 * 60 
 START_HOUR = 8
 
 def minutes_to_time(minutes):
@@ -65,7 +65,6 @@ def init_database_connection():
             return
             
         try:
-            # ป้องกันการเรียก initialize_app ซ้ำ
             try:
                 get_app()
             except ValueError:
@@ -84,8 +83,7 @@ def init_database_connection():
             st.sidebar.error("💡 ตรวจสอบ: Key 'firestore_credentials' ใน Streamlit Secrets", icon="🛠️")
 
 
-# 🛑 B1: LOADING USERS FROM DB
-@st.cache_data(ttl=3600) # Cache User List for 1 hour
+@st.cache_data(ttl=3600)
 def load_users_from_db():
     """โหลดข้อมูลผู้ใช้ทั้งหมดจาก Collection 'users' ใน Firestore"""
     if not st.session_state.db_ready:
@@ -108,7 +106,6 @@ def load_users_from_db():
         return MOCK_USER_FALLBACK 
 
 
-# 🛑 B2: LOADING BOOKINGS FROM DB (TTL=5s for Near-Real-time)
 @st.cache_data(ttl=5) 
 def load_bookings_from_db():
     """โหลดข้อมูลการจองทั้งหมดจาก Firestore (Near-Real-time)"""
@@ -117,11 +114,10 @@ def load_bookings_from_db():
 
     try:
         docs = st.session_state.db.collection("bookings").stream()
-        # เก็บ Document ID ไว้ด้วยเพื่อใช้ในการลบ
         bookings = []
         for doc in docs:
             booking_data = doc.to_dict()
-            booking_data['doc_id'] = doc.id # Store the document ID
+            booking_data['doc_id'] = doc.id
             bookings.append(booking_data)
             
         return bookings
@@ -130,14 +126,12 @@ def load_bookings_from_db():
         return []
 
 
-# 🛑 C1: SAVING BOOKING TO DB
 def save_booking_to_db(new_booking):
     """บันทึกการจองใหม่ไปยัง Firestore"""
     if not st.session_state.db_ready:
         return False
 
     try:
-        # 🛑 FIX: ลบ object ชั่วคราวออกก่อนบันทึก
         booking_to_save = {k: v for k, v in new_booking.items() if not k.endswith('_obj')}
         st.session_state.db.collection("bookings").add(booking_to_save)
         load_bookings_from_db.clear() 
@@ -146,17 +140,16 @@ def save_booking_to_db(new_booking):
         st.error(f"❌ ข้อผิดพลาดในการบันทึกข้อมูลลง DB: {e}", icon="🚨")
         return False
 
-# 🛑 C2: DELETING BOOKING FROM DB (New Function)
+
 def delete_booking_from_db(doc_id):
     """ลบเอกสารการจองจาก Firestore ด้วย Document ID"""
     if not st.session_state.db_ready:
         return False
     
-    # 🛑 doc_id จะถูกส่งมาในรูปแบบ 'Cancel-{doc_id}' จาก st.data_editor
     if doc_id.startswith("Cancel-"):
         actual_doc_id = doc_id.split("-", 1)[1]
     else:
-        actual_doc_id = doc_id # กรณีเรียกใช้ตรงๆ
+        actual_doc_id = doc_id
     
     try:
         st.session_state.db.collection("bookings").document(actual_doc_id).delete()
@@ -167,28 +160,8 @@ def delete_booking_from_db(doc_id):
         st.error(f"❌ ข้อผิดพลาดในการลบการจอง: {e}", icon="🚨")
         return False
 
-# 🛑 C3: SAVING NEW USER TO DB (New Function for Sign Up)
-def save_new_user_to_db(username, email, hashed_password):
-    """บันทึกผู้ใช้ใหม่ลงใน Collection 'users'"""
-    if not st.session_state.db_ready:
-        return False
-    
-    try:
-        user_data = {
-            "email": email,
-            "hashed_password": hashed_password,
-            "role": "user" # กำหนดบทบาทเริ่มต้นเป็น user
-        }
-        # ใช้ username เป็น Document ID
-        st.session_state.db.collection("users").document(username).set(user_data)
-        load_users_from_db.clear() # Clear user cache
-        return True
-    except Exception as e:
-        st.error(f"❌ ข้อผิดพลาดในการบันทึกผู้ใช้ใหม่: {e}", icon="🚨")
-        return False
 
-
-# --- Core Logic: Conflict Check ---
+# --- Core Logic: Conflict Check & Callbacks ---
 
 def is_conflict(new_booking, current_bookings):
     """ตรวจสอบความขัดแย้งของการจอง"""
@@ -212,13 +185,11 @@ def is_conflict(new_booking, current_bookings):
             s_new, e_new = time_to_seconds(new_start_obj), time_to_seconds(new_end_obj)
             s_exist, e_exist = time_to_seconds(existing_start), time_to_seconds(existing_end)
 
-            # ตรวจสอบการทับซ้อน
             if not (e_new <= s_exist or s_new >= e_exist):
                 return True
     return False
 
 
-# --- Callback function for Form Submission ---
 def handle_booking_submission(room_name, booking_date, start_time, end_time):
     """ประมวลผลข้อมูลฟอร์มและพยายามสร้างการจองใหม่"""
     
@@ -241,7 +212,6 @@ def handle_booking_submission(room_name, booking_date, start_time, end_time):
         'end_time': end_time.isoformat(timespec='minutes'), 
         'user_id': st.session_state.authenticated_user,
         'user_email': user_email,
-        # 🛑 เก็บ object ชั่วคราวสำหรับ Conflict Check เท่านั้น
         'date_obj': booking_date, 
         'start_time_obj': start_time,
         'end_time_obj': end_time,
@@ -253,7 +223,6 @@ def handle_booking_submission(room_name, booking_date, start_time, end_time):
         if save_booking_to_db(new_booking):
             st.toast("✅ การจองสำเร็จ! ห้องของคุณถูกบันทึกแล้ว", icon="🎉")
 
-# --- UI Components: Authentication & Sign Up ---
 
 def handle_signup(username, email, password, confirm_password):
     """จัดการการลงทะเบียนผู้ใช้ใหม่"""
@@ -278,7 +247,6 @@ def handle_signup(username, email, password, confirm_password):
             st.toast("❌ ข้อผิดพลาดในการเข้ารหัสรหัสผ่าน (bcrypt)", icon="🚨")
             return
     else:
-        # Mock Check/Sign Up (เฉพาะในโหมดที่ไม่มี bcrypt)
         hashed_password = "MOCK_HASH_FOR_" + username
         if password != "signup":
             st.toast("⚠️ Mock Mode: ต้องใช้รหัสผ่าน 'signup' ในโหมดนี้เพื่อลงทะเบียน", icon="⚠️")
@@ -291,6 +259,8 @@ def handle_signup(username, email, password, confirm_password):
     else:
         st.toast("❌ บันทึกผู้ใช้ใหม่ไม่สำเร็จ", icon="🚨")
 
+
+# --- UI Components: Display Functions (Defined before main) ---
 
 def display_profile_card():
     """แสดง Profile Card ของผู้ใช้ที่ล็อกอินแล้ว"""
@@ -313,10 +283,24 @@ def display_profile_card():
     ), use_container_width=True)
 
 
-def display_login_form():
-    """ฟอร์มสำหรับ Login"""
+def authenticate_user():
+    """จัดการกระบวนการล็อกอิน/ยืนยันตัวตนของผู้ใช้ด้วย Hashed Password โดยดึงข้อมูลจาก DB"""
+    st.sidebar.subheader("🔒 เข้าสู่ระบบ (Production)")
+    
+    if st.session_state.authenticated_user:
+        current_users = load_users_from_db() 
+        current_role = current_users[st.session_state.authenticated_user]['role']
+        role_thai = "ผู้ดูแลระบบ" if current_role == 'admin' else "ผู้ใช้งานทั่วไป"
+        st.sidebar.success(f"เข้าสู่ระบบในชื่อ: **{st.session_state.authenticated_user}** ({role_thai})")
+        if st.sidebar.button("ออกจากระบบ", key="logout_btn", use_container_width=True):
+            st.session_state.authenticated_user = None
+            st.session_state.user_role = None
+            load_bookings_from_db.clear()
+            load_users_from_db.clear()
+            st.rerun()
+        return True
+    
     current_users = load_users_from_db() 
-    st.sidebar.subheader("🔒 เข้าสู่ระบบ")
 
     with st.sidebar.form(key='login_form'):
         username = st.text_input("ชื่อผู้ใช้ (Username)", key="login_username_input")
@@ -339,7 +323,6 @@ def display_login_form():
                         st.toast("❌ Hash Key ไม่สมบูรณ์ กรุณาตรวจสอบ Firestore Console", icon="🛠️")
                         return
                 else:
-                    # 🛑 Mock Check (สำหรับ Admin P789 หรือ Mock User)
                     if username == "admin.user" and password == 'p789':
                          is_correct = True
                     elif stored_hash_str == "MOCK_HASH_FOR_" + username:
@@ -359,6 +342,12 @@ def display_login_form():
     if st.sidebar.button("สมัครสมาชิกใหม่", key="signup_toggle"):
         st.session_state.mode = 'signup'
         st.rerun()
+    return False # ต้องมี return ค่านี้
+
+
+def display_login_form():
+    """Wrapper function for login form (for modularity)"""
+    return authenticate_user()
 
 
 def display_signup_form():
@@ -404,7 +393,6 @@ def display_availability_matrix():
         if booking_date == view_date:
             daily_bookings.append(b)
 
-    # สร้างตารางสถานะห้องว่าง (30 นาทีต่อช่วง)
     time_index = []
     start_hour = 8
     end_hour = 17
@@ -573,10 +561,8 @@ def display_data_and_export():
         
 def initialize_state():
     """ฟังก์ชันเริ่มต้น Session State และการเชื่อมต่อ DB"""
-    # 1. เรียกฟังก์ชันเชื่อมต่อ DB ก่อน (จะตั้งค่า db_ready)
     init_database_connection()
     
-    # 2. ตั้งค่า Session State ที่จำเป็น (ถ้ายังไม่มี)
     if 'rooms' not in st.session_state:
         st.session_state.rooms = ROOMS
     if 'authenticated_user' not in st.session_state:
@@ -601,6 +587,7 @@ def main():
     
     initialize_state()
     
+    # 🛑 แก้ไข: เรียก authenticate_user() โดยตรง
     is_authenticated = authenticate_user()
 
     display_availability_matrix()
