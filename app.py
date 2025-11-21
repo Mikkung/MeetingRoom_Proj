@@ -490,6 +490,8 @@ def display_booking_form():
             max_value=max_minutes, # แก้ไข: เปลี่ยน max_minutes เป็น max_value
             value=(default_start_minutes, default_end_minutes),
             step=10,
+            # 🛑 เพิ่ม format_func เพื่อแสดงเวลาที่มนุษย์อ่านได้
+            format_func=lambda minutes: minutes_to_time(minutes).strftime('%H:%M'), 
             key="time_range_slider",
             label_visibility="visible"
         )
