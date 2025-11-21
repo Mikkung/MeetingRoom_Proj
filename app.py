@@ -28,7 +28,7 @@ except ImportError:
 USERS_DB = {
     "john.doe": {
         "email": "john.doe@ise.com",
-        "hashed_password": "$2b$12$FAKE.HASH.FOR.JOHN.DO.NOT.USE.THIS.IN.PRODUCTION.1", 
+        "hashed_password": "$2b$12$itktik45CGlbHKXQ6NvFWuMJXqh9sqU.MTb9RWbf1Ru4jIsQzZbC.", 
         "role": "user" 
     },
     "jane.smith": {
@@ -480,3 +480,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
