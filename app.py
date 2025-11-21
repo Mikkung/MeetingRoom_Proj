@@ -191,7 +191,6 @@ def save_new_user_to_db(username, email, hashed_password):
 def initialize_state():
     """
     ฟังก์ชันที่รวมการเริ่มต้น Session State และการเชื่อมต่อ DB
-    แก้ไข NameError โดยการรวมการเริ่มต้นตัวแปรทั้งหมดไว้ที่นี่
     """
     if 'rooms' not in st.session_state:
         st.session_state.rooms = ROOMS
@@ -491,7 +490,7 @@ def display_booking_form():
             max_minutes=max_minutes,
             value=(default_start_minutes, default_end_minutes),
             step=10,
-            format='%H:%M',
+            # 🛑 นำ format ออกเพื่อแก้ TypeError
             key="time_range_slider",
             label_visibility="visible"
         )
@@ -508,29 +507,6 @@ def display_booking_form():
             on_click=handle_booking_submission,
             args=(room_name, booking_date, start_time, end_time)
         )
-
-@st.cache_data
-def convert_df_to_csv(df):
-    """แปลง Pandas DataFrame เป็น CSV สำหรับดาวน์โหลด"""
-    df_export = df.copy()
-    
-    df_export['Date'] = df_export['date'].astype(str)
-    df_export['StartTime'] = df_export['start_time'].astype(str)
-    df_export['EndTime'] = df_export['end_time'].astype(str)
-    
-    columns_to_keep = ['room', 'Date', 'StartTime', 'EndTime', 'user_id', 'user_email']
-    df_export = df_export[[col for col in columns_to_keep if col in df_export.columns]]
-
-    df_export = df_export.rename(columns={
-        'room': 'Room',
-        'user_id': 'Username',
-        'user_email': 'Email'
-    })
-
-    output = io.StringIO()
-    df_export.to_csv(output, index=False, encoding='utf-8')
-    processed_data = output.getvalue().encode('utf-8')
-    return processed_data
 
 
 def display_data_and_export():
@@ -619,7 +595,7 @@ def main():
     st.title("ISE Meeting Room Scheduler 🏢 (Stable Version)")
     st.info("💡 แอปพลิเคชันนี้เชื่อมต่อกับฐานข้อมูล Firestore แล้ว")
     
-    # แก้ไข NameError โดยการรวม initialize_state() ไว้ใน main()
+    # 🛑 การเริ่มต้นสถานะและการเชื่อมต่อ DB
     initialize_state()
     
     if st.session_state.authenticated_user:
