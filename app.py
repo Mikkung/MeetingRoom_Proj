@@ -54,8 +54,7 @@ def minutes_to_time(minutes):
     minute = total_minutes % 60
     return datetime.time(hour, minute)
 
-
-# --- DATABASE / FIREBASE LOGIC ---
+# --- INITIALIZATION AND DB CONNECTION ---
 
 def init_database_connection():
     """เชื่อมต่อกับ Firestore และป้องกันการเริ่มต้นซ้ำ"""
@@ -83,7 +82,23 @@ def init_database_connection():
             st.sidebar.error("💡 ตรวจสอบ: Key 'firestore_credentials' ใน Streamlit Secrets", icon="🛠️")
 
 
-@st.cache_data(ttl=3600)
+def initialize_state():
+    """เริ่มต้นตัวแปร Session State และโหลดข้อมูล"""
+    init_database_connection() # เชื่อมต่อ DB
+    
+    if 'rooms' not in st.session_state:
+        st.session_state.rooms = ROOMS
+    if 'authenticated_user' not in st.session_state:
+        st.session_state.authenticated_user = None
+    if 'user_role' not in st.session_state:
+        st.session_state.user_role = None
+    if 'mode' not in st.session_state:
+        st.session_state.mode = 'login'
+
+
+# --- DATABASE OPERATIONS ---
+
+@st.cache_data(ttl=3600) # Cache User List for 1 hour
 def load_users_from_db():
     """โหลดข้อมูลผู้ใช้ทั้งหมดจาก Collection 'users' ใน Firestore"""
     if not st.session_state.db_ready:
@@ -132,6 +147,7 @@ def save_booking_to_db(new_booking):
         return False
 
     try:
+        # 🛑 แก้ไข: กรองตัวแปรที่เป็น Object ออกก่อนส่งไป Firestore
         booking_to_save = {k: v for k, v in new_booking.items() if not k.endswith('_obj')}
         st.session_state.db.collection("bookings").add(booking_to_save)
         load_bookings_from_db.clear() 
@@ -161,7 +177,26 @@ def delete_booking_from_db(doc_id):
         return False
 
 
-# --- Core Logic: Conflict Check & Callbacks ---
+def save_new_user_to_db(username, email, hashed_password):
+    """บันทึกผู้ใช้ใหม่ลงใน Collection 'users'"""
+    if not st.session_state.db_ready:
+        return False
+    
+    try:
+        user_data = {
+            "email": email,
+            "hashed_password": hashed_password,
+            "role": "user" # กำหนดบทบาทเริ่มต้นเป็น user
+        }
+        st.session_state.db.collection("users").document(username).set(user_data)
+        load_users_from_db.clear() # Clear user cache
+        return True
+    except Exception as e:
+        st.error(f"❌ ข้อผิดพลาดในการบันทึกผู้ใช้ใหม่: {e}", icon="🚨")
+        return False
+
+
+# --- CORE LOGIC & CALLBACKS ---
 
 def is_conflict(new_booking, current_bookings):
     """ตรวจสอบความขัดแย้งของการจอง"""
@@ -212,6 +247,7 @@ def handle_booking_submission(room_name, booking_date, start_time, end_time):
         'end_time': end_time.isoformat(timespec='minutes'), 
         'user_id': st.session_state.authenticated_user,
         'user_email': user_email,
+        # ตัวแปรเหล่านี้ถูกใช้ในการตรวจสอบความขัดแย้งเท่านั้น และถูกกรองออกใน save_booking_to_db
         'date_obj': booking_date, 
         'start_time_obj': start_time,
         'end_time_obj': end_time,
@@ -260,7 +296,7 @@ def handle_signup(username, email, password, confirm_password):
         st.toast("❌ บันทึกผู้ใช้ใหม่ไม่สำเร็จ", icon="🚨")
 
 
-# --- UI Components: Display Functions (Defined before main) ---
+# --- UI COMPONENTS ---
 
 def display_profile_card():
     """แสดง Profile Card ของผู้ใช้ที่ล็อกอินแล้ว"""
@@ -284,7 +320,7 @@ def display_profile_card():
 
 
 def authenticate_user():
-    """จัดการกระบวนการล็อกอิน/ยืนยันตัวตนของผู้ใช้ด้วย Hashed Password โดยดึงข้อมูลจาก DB"""
+    """จัดการกระบวนการล็อกอิน/ยืนยันตัวตนของผู้ใช้"""
     st.sidebar.subheader("🔒 เข้าสู่ระบบ (Production)")
     
     if st.session_state.authenticated_user:
@@ -325,7 +361,7 @@ def authenticate_user():
                 else:
                     if username == "admin.user" and password == 'p789':
                          is_correct = True
-                    elif stored_hash_str == "MOCK_HASH_FOR_" + username:
+                    elif stored_hash_str.startswith("MOCK_HASH_FOR_"): # For mock signed-up users
                          is_correct = True
 
                 if is_correct:
@@ -342,7 +378,7 @@ def authenticate_user():
     if st.sidebar.button("สมัครสมาชิกใหม่", key="signup_toggle"):
         st.session_state.mode = 'signup'
         st.rerun()
-    return False # ต้องมี return ค่านี้
+    return False
 
 
 def display_login_form():
@@ -511,39 +547,43 @@ def display_data_and_export():
     else:
         bookings_df = pd.DataFrame(current_bookings)
 
-        bookings_for_display = []
-        for b in current_bookings:
-            is_owner = b['user_id'] == current_user
-            can_cancel = is_owner or current_role == 'admin'
-            
-            row = {
-                'ID': b['doc_id'][:6] + '...', 
-                'ห้อง': b['room'],
-                'วันที่': b['date'],
-                'เวลาเริ่มต้น': b['start_time'],
-                'เวลาสิ้นสุด': b['end_time'],
-                'ผู้จอง': b['user_id'],
-                'ยกเลิก': f"Cancel-{b['doc_id']}" if can_cancel else "" 
-            }
-            bookings_for_display.append(row)
-            
-        bookings_df_display = pd.DataFrame(bookings_for_display)
+        # 🛑 ส่วนการยกเลิก (ใช้ Select Box ที่เสถียรที่สุด)
+        if current_user and (current_role == 'admin' or any(b['user_id'] == current_user for b in current_bookings)):
+            st.markdown("---")
+            st.markdown("##### 🗑️ ยกเลิกการจอง")
 
-        st.data_editor(
-            bookings_df_display, 
-            column_config={
-                "ยกเลิก": st.column_config.ButtonColumn(
-                    "ยกเลิก",
-                    help="คลิกเพื่อยกเลิกการจอง",
-                    on_click=delete_booking_from_db,
-                    args=['<item>'] 
-                ),
-            },
-            hide_index=True,
-            use_container_width=True,
-            disabled=('ID', 'ห้อง', 'วันที่', 'เวลาเริ่มต้น', 'เวลาสิ้นสุด', 'ผู้จอง')
-        )
+            # กรองเฉพาะรายการที่ยกเลิกได้
+            cancellable_bookings = [
+                (f"{b['date']} {b['start_time']} ({b['room']} โดย {b['user_id']})", b['doc_id'])
+                for b in current_bookings
+                if b['user_id'] == current_user or current_role == 'admin'
+            ]
+            
+            if cancellable_bookings:
+                options, doc_ids = zip(*cancellable_bookings)
+                selected_booking_id = st.selectbox("เลือกรายการจองที่ต้องการยกเลิก", options, key="cancel_select")
+                
+                if st.button("ยืนยันการยกเลิก", key="cancel_button", type="secondary"):
+                    selected_doc_id = doc_ids[options.index(selected_booking_id)]
+                    delete_booking_from_db(selected_doc_id)
+            else:
+                st.info("คุณไม่มีสิทธิ์ยกเลิกการจองในขณะนี้", icon="🔒")
+
+
+        bookings_df_display = bookings_df.rename(columns={
+            'room': 'ห้อง',
+            'date': 'วันที่',
+            'start_time': 'เวลาเริ่มต้น',
+            'end_time': 'เวลาสิ้นสุด',
+            'user_id': 'ชื่อผู้ใช้',
+            'user_email': 'อีเมล'
+        })
         
+        st.dataframe(
+            bookings_df_display[['ห้อง', 'วันที่', 'เวลาเริ่มต้น', 'เวลาสิ้นสุด', 'ชื่อผู้ใช้', 'อีเมล']], 
+            use_container_width=True, 
+            hide_index=True
+        )
 
         if current_role == 'admin':
             csv_data = convert_df_to_csv(bookings_df)
@@ -557,21 +597,9 @@ def display_data_and_export():
             )
         elif current_user:
             st.info("คุณต้องเป็นผู้ดูแลระบบ (Admin) เท่านั้น จึงจะสามารถส่งออกข้อมูลสถิติการจองทั้งหมดได้")
-        
-        
-def initialize_state():
-    """ฟังก์ชันเริ่มต้น Session State และการเชื่อมต่อ DB"""
-    init_database_connection()
-    
-    if 'rooms' not in st.session_state:
-        st.session_state.rooms = ROOMS
-    if 'authenticated_user' not in st.session_state:
-        st.session_state.authenticated_user = None
-    if 'user_role' not in st.session_state:
-        st.session_state.user_role = None
-    if 'mode' not in st.session_state:
-        st.session_state.mode = 'login'
 
+
+# --- MAIN APPLICATION ENTRY POINT ---
 
 def main():
     """ฟังก์ชันหลักสำหรับรันแอปพลิเคชัน Streamlit"""
@@ -583,12 +611,21 @@ def main():
     )
 
     st.title("ISE Meeting Room Scheduler 🏢 (Feature Complete)")
-    st.info("💡 แอปพลิเคชันนี้เชื่อมต่อกับฐานข้อมูล Firestore แล้ว หากมีการตั้งค่า Secrets ถูกต้อง ข้อมูลจะถูกบันทึกอย่างถาวร")
+    st.info("💡 แอปพลิเคชันนี้เชื่อมต่อกับฐานข้อมูล Firestore แล้ว")
     
     initialize_state()
     
-    # 🛑 แก้ไข: เรียก authenticate_user() โดยตรง
-    is_authenticated = authenticate_user()
+    if st.session_state.authenticated_user:
+        display_profile_card()
+    else:
+        if st.session_state.mode == 'login':
+            display_login_form()
+        elif st.session_state.mode == 'signup':
+            display_signup_form()
+
+    if st.session_state.db_ready == False:
+        st.error("⛔ ไม่สามารถใช้งานได้: การเชื่อมต่อฐานข้อมูลล้มเหลว", icon="🚨")
+        return
 
     display_availability_matrix()
     st.markdown("---")
@@ -602,8 +639,7 @@ def main():
             st.warning("👉 กรุณาเข้าสู่ระบบ/สมัครสมาชิกที่แถบด้านข้าง (Sidebar) เพื่อเข้าถึงฟอร์มการจอง", icon="👉")
 
     with col2:
-        if st.session_state.authenticated_user:
-            display_data_and_export()
+        display_data_and_export()
 
 
 if __name__ == "__main__":
