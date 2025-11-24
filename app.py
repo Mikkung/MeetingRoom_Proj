@@ -529,7 +529,7 @@ def display_booking_form():
 def display_data_and_export():
     """แสดงรายการห้องและการจองปัจจุบัน พร้อมปุ่ม export และ Cancel"""
     
-    st.subheader("🏢 รายละเอียดห้องประชุม")
+    st.subheader("🏢 Room Specifications")
     
     rooms_df = pd.DataFrame([
         {
@@ -541,7 +541,7 @@ def display_data_and_export():
     ])
     st.dataframe(rooms_df, use_container_width=True, hide_index=True)
 
-    st.subheader("📚 รายการจองทั้งหมดในปัจจุบัน")
+    st.subheader("📚 Booking List")
     
     current_bookings = load_bookings_from_db()
     current_user = st.session_state.authenticated_user
@@ -652,5 +652,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
