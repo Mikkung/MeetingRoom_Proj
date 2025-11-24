@@ -414,10 +414,10 @@ def convert_df_to_csv(df):
 
 def display_availability_matrix():
     """แสดงตารางสถานะห้องว่างแบบเรียลไทม์"""
-    st.subheader("🗓️ สถานะห้องว่างแบบตาราง")
+    st.subheader("🗓️ Room Status")
     
     view_date = st.date_input(
-        "เลือกวันที่เพื่อดูสถานะห้องว่าง", 
+        "Choose Date: ", 
         value=datetime.date.today(),
         key="view_date_select"
     )
@@ -425,7 +425,7 @@ def display_availability_matrix():
     current_bookings = load_bookings_from_db()
 
     if not current_bookings:
-        st.info(f"💡 ห้องทั้งหมดว่างในวันที่ {view_date.strftime('%Y-%m-%d')}.", icon="💡")
+        st.info(f"💡 All Room Avialable on {view_date.strftime('%Y-%m-%d')}.", icon="💡")
         return
 
     daily_bookings = []
@@ -652,4 +652,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
