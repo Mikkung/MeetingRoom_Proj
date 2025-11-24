@@ -609,13 +609,13 @@ def display_data_and_export():
 def main():
     """ฟังก์ชันหลักสำหรับรันแอปพลิเคชัน Streamlit"""
     st.set_page_config(
-        page_title="ISE Meeting Room Scheduler (Feature Complete)",
+        page_title="ISE Meeting Room Scheduler",
         page_icon="📅",
         layout="wide",
         initial_sidebar_state="expanded"
     )
 
-    st.title("ISE Meeting Room Scheduler 🏢 (Feature Complete)")
+    st.title("ISE Meeting Room Scheduler 🏢")
     st.info("💡 แอปพลิเคชันนี้เชื่อมต่อกับฐานข้อมูล Firestore แล้ว หากมีการตั้งค่า Secrets ถูกต้อง ข้อมูลจะถูกบันทึกอย่างถาวร")
     
     initialize_state()
@@ -652,3 +652,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
