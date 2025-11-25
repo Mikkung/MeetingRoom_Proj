@@ -24,7 +24,7 @@ except ImportError:
     firebase_installed = False
     st.error("❌ ไม่พบไลบรารี 'firebase-admin' กรุณาติดตั้งเพื่อเชื่อมต่อ Firestore", icon="🚨")
 
-# 🛑 นำเข้า Streamlit Cookies Manager สำหรับการคงสถานะ (NEW)
+# 🛑 นำเข้า Streamlit Cookies Manager สำหรับการคงสถานะ
 try:
     from streamlit_cookies_manager import EncryptedCookieManager
     cookies_manager_installed = True
@@ -110,21 +110,27 @@ def initialize_state():
     
     # NEW: โหลดสถานะคุกกี้
     if COOKIES and not COOKIES.ready():
-        # รอให้คุกกี้พร้อม (สำหรับ Streamlit Run แรกสุด)
         COOKIES.ready()
 
     if 'rooms' not in st.session_state:
         st.session_state.rooms = ROOMS
+
+    # 🛑 (แก้ไขเพื่อแก้ AttributeError) ต้องมั่นใจว่าคีย์เหล่านี้มีอยู่เสมอ
+    if 'authenticated_user' not in st.session_state:
+        st.session_state.authenticated_user = None
+    if 'user_role' not in st.session_state:
+        st.session_state.user_role = None
         
     # **ส่วนที่แก้ไขเพื่อให้สถานะคงอยู่ (Persistence Logic)**
     # 1. โหลดสถานะล็อกอินจาก Session State ก่อน
-    if 'authenticated_user' not in st.session_state or st.session_state.authenticated_user is None:
+    if st.session_state.authenticated_user is None: 
         # 2. หากไม่มีใน Session State ให้พยายามโหลดจากคุกกี้
         cookie_user = COOKIES.get('user_id') if COOKIES else None
         if cookie_user:
             st.session_state.authenticated_user = cookie_user
             st.session_state.user_role = COOKIES.get('user_role')
         
+    # 🛑 (แก้ไข) กำหนดค่าเริ่มต้นของ 'mode'
     if 'mode' not in st.session_state:
         # กำหนดโหมดตามสถานะการล็อกอิน
         st.session_state.mode = 'login' if st.session_state.authenticated_user is None else 'app'
