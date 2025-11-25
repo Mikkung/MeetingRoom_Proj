@@ -3,11 +3,10 @@ import datetime
 import pandas as pd
 import json
 import io
-import time
 
-# --- LIBRARIES AND CONFIGURATION ---
+# ต้องติดตั้ง: pip install firebase-admin bcrypt streamlit-cookies-manager
 
-# 🛑 นำเข้า bcrypt สำหรับการเข้ารหัสรหัสผ่าน
+# 🛑 ต้องใช้ try-except เนื่องจาก Streamlit Cloud อาจไม่ให้ติดตั้ง bcrypt ได้ง่ายๆ
 try:
     import bcrypt
     bcrypt_installed = True
@@ -21,38 +20,32 @@ try:
     from firebase_admin.exceptions import InvalidArgumentError
     firebase_installed = True
 except ImportError:
+    from firebase_admin import get_app
     firebase_installed = False
     st.error("❌ ไม่พบไลบรารี 'firebase-admin' กรุณาติดตั้งเพื่อเชื่อมต่อ Firestore", icon="🚨")
 
-# 🛑 นำเข้า Streamlit Cookies Manager สำหรับการคงสถานะ
-try:
-    from streamlit_cookies_manager import EncryptedCookieManager
-    cookies_manager_installed = True
-except ImportError:
-    cookies_manager_installed = False
-    st.error("❌ ไม่พบไลบรารี 'streamlit-cookies-manager'", icon="🚨")
+# 🔐 Cookies สำหรับจำสถานะการล็อกอิน
+from streamlit_cookies_manager import EncryptedCookieManager
 
+# prefix ควรตั้งไม่ซ้ำกับแอปอื่น
+cookies = EncryptedCookieManager(
+    prefix="ise_meeting_",
+    # ถ้าจะใช้ password เอง สามารถดึงจาก st.secrets ได้ เช่น:
+    # password=st.secrets["cookie_password"],
+)
 
-# 🔑 INITIALIZE COOKIES MANAGER
-COOKIES = None
-if cookies_manager_installed:
-    try:
-        # ใช้คีย์จาก st.secrets เพื่อเข้ารหัสคุกกี้
-        cookie_key = st.secrets.get("cookie_key", "fallback_secret_key_if_not_set_please_set_it_123456")
-        COOKIES = EncryptedCookieManager(
-            prefix="ise_sch_",
-            password=cookie_key,
-        )
-    except Exception as e:
-        COOKIES = None
-        st.error(f"❌ ข้อผิดพลาดในการเริ่มต้น Cookie Manager: {e}", icon="🚨")
-        
-# 1. Mock User Database 
+if not cookies.ready:
+    # ให้หยุดรันรอบนี้ก่อน จนกว่า browser จะพร้อมใช้งาน cookie
+    st.stop()
+
+# --- CONFIGURATION & UTILITIES ---
+
+# 1. Mock User Database (ใช้ Hash ที่คุณสร้างและจะอัปเดต)
 MOCK_USER_FALLBACK = {
     "admin.user": {
         "email": "admin@ise.com",
-        "hashed_password": "$2b$12$FAKE.HASH.FOR.ADMIN.DO.NOT.USE.THIS.IN.PRODUCTION.3",  
-        "role": "admin"  
+        "hashed_password": "$2b$12$FAKE.HASH.FOR.ADMIN.DO.NOT.USE.THIS.IN.PRODUCTION.3",
+        "role": "admin"
     }
 }
 
@@ -63,9 +56,10 @@ ROOMS = {
     "ISE_Meeting_Room_III_304/1_Fl1": {"capacity": 20, "has_projector": True}
 }
 
-# 3. Time Slot Configuration 
-TOTAL_MINUTES = 9 * 60 
+# 3. Time Slot Configuration
+TOTAL_MINUTES = 9 * 60
 START_HOUR = 8
+
 
 def minutes_to_time(minutes):
     """แปลงนาทีตั้งแต่ 8:00 เป็นวัตถุ datetime.time"""
@@ -73,6 +67,7 @@ def minutes_to_time(minutes):
     hour = total_minutes // 60
     minute = total_minutes % 60
     return datetime.time(hour, minute)
+
 
 # --- INITIALIZATION AND DB CONNECTION ---
 
@@ -82,22 +77,20 @@ def init_database_connection():
         if not firebase_installed:
             st.session_state.db_ready = False
             return
-            
+
         try:
             try:
-                # ตรวจสอบว่ามีการ Initialize ไปแล้วหรือไม่
                 get_app()
             except ValueError:
-                # อ่าน Credentials จาก st.secrets
                 key_dict = json.loads(st.secrets["firestore_credentials"])
                 cred = credentials.Certificate(key_dict)
                 initialize_app(cred)
-            
+
             st.session_state.db = firestore.client()
             st.session_state.db_ready = True
-            st.session_state.mode = 'login'  
+            st.session_state.mode = 'login'
             st.sidebar.success("✅ เชื่อมต่อ Firestore สำเร็จ", icon="🌐")
-            
+
         except Exception as e:
             st.session_state.db_ready = False
             st.sidebar.error(f"❌ ข้อผิดพลาดในการเชื่อมต่อ Firestore: {e}", icon="🚨")
@@ -105,69 +98,60 @@ def init_database_connection():
 
 
 def initialize_state():
-    """เริ่มต้นตัวแปร Session State และโหลดข้อมูล รวมถึงสถานะจากคุกกี้"""
-    init_database_connection() # เชื่อมต่อ DB
-    
-    # NEW: โหลดสถานะคุกกี้
-    if COOKIES and not COOKIES.ready():
-        COOKIES.ready()
+    """เริ่มต้นตัวแปร Session State และโหลดข้อมูล + auto-login จาก cookie"""
+    init_database_connection()  # เชื่อมต่อ DB
 
     if 'rooms' not in st.session_state:
         st.session_state.rooms = ROOMS
 
-    # 🛑 (แก้ไขเพื่อแก้ AttributeError) ต้องมั่นใจว่าคีย์เหล่านี้มีอยู่เสมอ
-    if 'authenticated_user' not in st.session_state:
-        st.session_state.authenticated_user = None
-    if 'user_role' not in st.session_state:
-        st.session_state.user_role = None
-        
-    # **ส่วนที่แก้ไขเพื่อให้สถานะคงอยู่ (Persistence Logic)**
-    # 1. โหลดสถานะล็อกอินจาก Session State ก่อน
-    if st.session_state.authenticated_user is None: 
-        # 2. หากไม่มีใน Session State ให้พยายามโหลดจากคุกกี้
-        cookie_user = COOKIES.get('user_id') if COOKIES else None
-        if cookie_user:
-            st.session_state.authenticated_user = cookie_user
-            st.session_state.user_role = COOKIES.get('user_role')
-        
-    # 🛑 (แก้ไข) กำหนดค่าเริ่มต้นของ 'mode'
+    # ตั้งค่า mode เริ่มต้น
     if 'mode' not in st.session_state:
-        # กำหนดโหมดตามสถานะการล็อกอิน
-        st.session_state.mode = 'login' if st.session_state.authenticated_user is None else 'app'
-    elif st.session_state.mode == 'login' and st.session_state.authenticated_user is not None:
-        # หากล็อกอินสำเร็จจากคุกกี้ ให้เปลี่ยนโหมดเป็น 'app'
-         st.session_state.mode = 'app'
+        st.session_state.mode = 'login'
+
+    # ลองอ่านค่าจาก cookie เพื่อ auto-login ถ้า session_state ยังว่าง
+    if 'authenticated_user' not in st.session_state or st.session_state.get('authenticated_user') is None:
+        saved_user = cookies.get("auth_user")
+        saved_role = cookies.get("auth_role")
+        if saved_user:
+            st.session_state.authenticated_user = saved_user
+            st.session_state.user_role = saved_role
+        else:
+            st.session_state.authenticated_user = None
+
+    if 'user_role' not in st.session_state or st.session_state.get('user_role') is None:
+        saved_role = cookies.get("auth_role")
+        st.session_state.user_role = saved_role if saved_role else None
+
 
 # --- DATABASE OPERATIONS ---
 
-@st.cache_data(ttl=3600) 
+@st.cache_data(ttl=3600)  # Cache User List for 1 hour
 def load_users_from_db():
     """โหลดข้อมูลผู้ใช้ทั้งหมดจาก Collection 'users' ใน Firestore"""
-    if not st.session_state.db_ready:
-        return MOCK_USER_FALLBACK 
+    if not st.session_state.get('db_ready', False):
+        return MOCK_USER_FALLBACK
 
     try:
         users = {}
-        # ตรวจสอบว่า collection 'users' มีอยู่จริง
         docs = st.session_state.db.collection("users").stream()
         for doc in docs:
             user_data = doc.to_dict()
             users[doc.id] = user_data
-            
+
         if not users:
             st.warning("⚠️ Collection 'users' ว่างเปล่า ใช้ข้อมูล Mock Admin", icon="⚠️")
             return MOCK_USER_FALLBACK
-            
+
         return users
     except Exception as e:
         st.error(f"❌ ข้อผิดพลาดในการโหลดข้อมูลผู้ใช้จาก DB: {e}", icon="🚨")
-        return MOCK_USER_FALLBACK 
+        return MOCK_USER_FALLBACK
 
 
-@st.cache_data(ttl=5) 
+@st.cache_data(ttl=5)
 def load_bookings_from_db():
     """โหลดข้อมูลการจองทั้งหมดจาก Firestore (Near-Real-time)"""
-    if not st.session_state.db_ready:
+    if not st.session_state.get('db_ready', False):
         return []
 
     try:
@@ -177,7 +161,7 @@ def load_bookings_from_db():
             booking_data = doc.to_dict()
             booking_data['doc_id'] = doc.id
             bookings.append(booking_data)
-            
+
         return bookings
     except Exception as e:
         st.error(f"❌ ข้อผิดพลาดในการดึงข้อมูลการจองจาก DB: {e}", icon="🚨")
@@ -186,14 +170,14 @@ def load_bookings_from_db():
 
 def save_booking_to_db(new_booking):
     """บันทึกการจองใหม่ไปยัง Firestore"""
-    if not st.session_state.db_ready:
+    if not st.session_state.get('db_ready', False):
         return False
 
     try:
-        # 🛑 กรองตัวแปรที่เป็น Object ออกก่อนส่งไป Firestore
+        # 🛑 แก้ไข: กรองตัวแปรที่เป็น Object ออกก่อนส่งไป Firestore
         booking_to_save = {k: v for k, v in new_booking.items() if not k.endswith('_obj')}
         st.session_state.db.collection("bookings").add(booking_to_save)
-        load_bookings_from_db.clear() 
+        load_bookings_from_db.clear()
         return True
     except Exception as e:
         st.error(f"❌ ข้อผิดพลาดในการบันทึกข้อมูลลง DB: {e}", icon="🚨")
@@ -202,15 +186,14 @@ def save_booking_to_db(new_booking):
 
 def delete_booking_from_db(doc_id):
     """ลบเอกสารการจองจาก Firestore ด้วย Document ID"""
-    if not st.session_state.db_ready:
+    if not st.session_state.get('db_ready', False):
         return False
-    
-    # โค้ดส่วนนี้ช่วยป้องกันปัญหา Doc ID ที่มาจาก SelectBox
+
     if doc_id.startswith("Cancel-"):
         actual_doc_id = doc_id.split("-", 1)[1]
     else:
         actual_doc_id = doc_id
-    
+
     try:
         st.session_state.db.collection("bookings").document(actual_doc_id).delete()
         load_bookings_from_db.clear()
@@ -223,17 +206,17 @@ def delete_booking_from_db(doc_id):
 
 def save_new_user_to_db(username, email, hashed_password):
     """บันทึกผู้ใช้ใหม่ลงใน Collection 'users'"""
-    if not st.session_state.db_ready:
+    if not st.session_state.get('db_ready', False):
         return False
-    
+
     try:
         user_data = {
             "email": email,
             "hashed_password": hashed_password,
-            "role": "user" # กำหนดบทบาทเริ่มต้นเป็น user
+            "role": "user"  # กำหนดบทบาทเริ่มต้นเป็น user
         }
         st.session_state.db.collection("users").document(username).set(user_data)
-        load_users_from_db.clear() # Clear user cache
+        load_users_from_db.clear()  # Clear user cache
         return True
     except Exception as e:
         st.error(f"❌ ข้อผิดพลาดในการบันทึกผู้ใช้ใหม่: {e}", icon="🚨")
@@ -250,7 +233,6 @@ def is_conflict(new_booking, current_bookings):
     new_end_obj = new_booking['end_time_obj']
 
     for booking in current_bookings:
-        # ป้องกัน error หากข้อมูลใน DB ไม่สมบูรณ์
         try:
             booking_date = datetime.date.fromisoformat(booking.get('date'))
             existing_start = datetime.time.fromisoformat(booking.get('start_time'))
@@ -259,9 +241,10 @@ def is_conflict(new_booking, current_bookings):
             continue
 
         if booking['room'] == new_room and booking_date == new_date_obj:
+
             def time_to_seconds(t):
                 return t.hour * 3600 + t.minute * 60 + t.second
-            
+
             s_new, e_new = time_to_seconds(new_start_obj), time_to_seconds(new_end_obj)
             s_exist, e_exist = time_to_seconds(existing_start), time_to_seconds(existing_end)
 
@@ -272,27 +255,28 @@ def is_conflict(new_booking, current_bookings):
 
 def handle_booking_submission(room_name, booking_date, start_time, end_time):
     """ประมวลผลข้อมูลฟอร์มและพยายามสร้างการจองใหม่"""
-    
+
     if st.session_state.authenticated_user is None:
         st.toast("🔒 กรุณาเข้าสู่ระบบก่อนทำการจอง", icon="🔒")
         return
-        
+
     if start_time >= end_time:
         st.toast("❌ เวลาเริ่มต้นต้องอยู่ก่อนเวลาสิ้นสุด", icon="⚠️")
         return
-    
-    current_users = load_users_from_db() 
+
+    current_users = load_users_from_db()
     user_email = current_users[st.session_state.authenticated_user]['email']
     current_bookings = load_bookings_from_db()
-        
+
     new_booking = {
         'room': room_name,
-        'date': booking_date.isoformat(), 
-        'start_time': start_time.isoformat(timespec='minutes'), 
-        'end_time': end_time.isoformat(timespec='minutes'), 
+        'date': booking_date.isoformat(),
+        'start_time': start_time.isoformat(timespec='minutes'),
+        'end_time': end_time.isoformat(timespec='minutes'),
         'user_id': st.session_state.authenticated_user,
         'user_email': user_email,
-        'date_obj': booking_date, 
+        # ตัวแปรเหล่านี้ถูกใช้ในการตรวจสอบความขัดแย้งเท่านั้น และถูกกรองออกใน save_booking_to_db
+        'date_obj': booking_date,
         'start_time_obj': start_time,
         'end_time_obj': end_time,
     }
@@ -311,29 +295,27 @@ def handle_signup(username, email, password, confirm_password):
     if not all([username, email, password, confirm_password]):
         st.toast("⚠️ กรุณากรอกข้อมูลให้ครบถ้วน", icon="⚠️")
         return
-    
+
     if username in current_users:
         st.toast("⛔ ชื่อผู้ใช้นี้ถูกใช้งานแล้ว", icon="⛔")
         return
-    
+
     if password != confirm_password:
         st.toast("❌ รหัสผ่านและยืนยันรหัสผ่านไม่ตรงกัน", icon="❌")
         return
 
     if bcrypt_installed:
         try:
-            # ใช้ bcrypt ในการเข้ารหัสรหัสผ่าน
             hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt(12)).decode('utf-8')
         except Exception:
             st.toast("❌ ข้อผิดพลาดในการเข้ารหัสรหัสผ่าน (bcrypt)", icon="🚨")
             return
     else:
-        # Mock Mode
         hashed_password = "MOCK_HASH_FOR_" + username
         if password != "signup":
             st.toast("⚠️ Mock Mode: ต้องใช้รหัสผ่าน 'signup' ในโหมดนี้เพื่อลงทะเบียน", icon="⚠️")
             return
-    
+
     if save_new_user_to_db(username, email, hashed_password):
         st.toast("🎉 ลงทะเบียนสำเร็จ! กรุณาเข้าสู่ระบบ", icon="🎉")
         st.session_state.mode = 'login'
@@ -342,87 +324,93 @@ def handle_signup(username, email, password, confirm_password):
         st.toast("❌ บันทึกผู้ใช้ใหม่ไม่สำเร็จ", icon="🚨")
 
 
+def handle_logout():
+    """จัดการการออกจากระบบ + ลบ cookie"""
+    st.session_state.authenticated_user = None
+    st.session_state.user_role = None
+    load_bookings_from_db.clear()
+    load_users_from_db.clear()
+    st.session_state.mode = 'login'
+
+    # ลบ cookie
+    cookies["auth_user"] = ""
+    cookies["auth_role"] = ""
+    cookies.save()
+
+    st.rerun()
+
+
 # --- UI COMPONENTS ---
 
 def display_profile_card():
     """แสดง Profile Card ของผู้ใช้ที่ล็อกอินแล้ว"""
-    current_users = load_users_from_db() 
+    current_users = load_users_from_db()
     user_id = st.session_state.authenticated_user
     user_data = current_users.get(user_id, {})
     current_role = user_data.get('role', 'unknown')
     role_thai = "ผู้ดูแลระบบ" if current_role == 'admin' else "ผู้ใช้งานทั่วไป"
-    
+
     st.sidebar.markdown("---")
     st.sidebar.markdown(f"**👤 {user_id.capitalize()}**")
     st.sidebar.markdown(f"📧 `{user_data.get('email', '-')}`")
     st.sidebar.markdown(f"🏷️ **{role_thai.upper()}**")
-    
-    # **ส่วนที่แก้ไข: เพิ่มการลบคุกกี้เมื่อออกจากระบบ**
-    st.sidebar.button("ออกจากระบบ", key="logout_btn", on_click=lambda: (
-        setattr(st.session_state, 'authenticated_user', None),
-        setattr(st.session_state, 'user_role', None),
-        
-        # 💡 ลบคุกกี้เพื่อยกเลิกการคงสถานะ
-        COOKIES.delete('user_id') if COOKIES else None,
-        COOKIES.delete('user_role') if COOKIES else None,
-        COOKIES.save() if COOKIES else None, 
-        
-        load_bookings_from_db.clear(),
-        load_users_from_db.clear(),
-        setattr(st.session_state, 'mode', 'login')
-    ), use_container_width=True)
+
+    st.sidebar.button(
+        "ออกจากระบบ",
+        key="logout_btn",
+        on_click=handle_logout,
+        use_container_width=True
+    )
 
 
 def display_login_form():
     """ฟอร์มสำหรับ Login"""
-    current_users = load_users_from_db() 
+    current_users = load_users_from_db()
     st.sidebar.subheader("🔒 เข้าสู่ระบบ")
 
     with st.sidebar.form(key='login_form'):
         username = st.text_input("ชื่อผู้ใช้ (Username)", key="login_username_input")
         password = st.text_input("รหัสผ่าน (Password)", type="password", key="login_password_input")
-        
+
         login_button = st.form_submit_button("เข้าสู่ระบบ", use_container_width=True, type="primary")
 
         if login_button:
             if username in current_users:
                 stored_hash_str = current_users[username].get('hashed_password', '')
                 is_correct = False
-                
+
                 if bcrypt_installed and stored_hash_str.startswith("$2b$"):
                     try:
                         stored_hash_bytes = stored_hash_str.encode('utf-8')
                         password_bytes = password.encode('utf-8')
-                        # ตรวจสอบรหัสผ่านด้วย bcrypt
                         if bcrypt.checkpw(password_bytes, stored_hash_bytes):
                             is_correct = True
                     except Exception:
                         st.toast("❌ Hash Key ไม่สมบูรณ์ กรุณาตรวจสอบ Firestore Console", icon="🛠️")
                         return
                 else:
-                    # Mock Mode fallback login check (ใช้สำหรับทดสอบหากไม่มี bcrypt/DB)
                     if username == "admin.user" and password == 'p789':
-                         is_correct = True
+                        is_correct = True
                     elif stored_hash_str == "MOCK_HASH_FOR_" + username:
-                         is_correct = True
+                        is_correct = True
 
                 if is_correct:
+                    role = current_users[username].get('role', 'user')
                     st.session_state.authenticated_user = username
-                    st.session_state.user_role = current_users[username]['role'] 
-                    st.toast(f"ยินดีต้อนรับ, {username}!", icon="👋")
-                    
-                    # 💡 ส่วนที่เพิ่ม: บันทึกสถานะการล็อกอินลงในคุกกี้
-                    if COOKIES:
-                        COOKIES.set('user_id', username)
-                        COOKIES.set('user_role', current_users[username]['role'])
-                        COOKIES.save() # บันทึกการเปลี่ยนแปลงลงในคุกกี้ของเบราว์เซอร์
+                    st.session_state.user_role = role
 
+                    # เขียน cookie เพื่อจำสถานะการล็อกอิน
+                    cookies["auth_user"] = username
+                    cookies["auth_role"] = role
+                    cookies.save()
+
+                    st.toast(f"ยินดีต้อนรับ, {username}!", icon="👋")
                     st.rerun()
                 else:
                     st.toast("⛔ ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง", icon="⛔")
             else:
                 st.toast("⛔ ชื่อผู้ใช้ไม่ถูกต้อง", icon="⛔")
-    
+
     st.sidebar.markdown("---")
     if st.sidebar.button("สมัครสมาชิกใหม่", key="signup_toggle"):
         st.session_state.mode = 'signup'
@@ -432,15 +420,15 @@ def display_login_form():
 def display_signup_form():
     """ฟอร์มสำหรับ Sign Up"""
     st.sidebar.subheader("📝 สมัครสมาชิก")
-    
+
     with st.sidebar.form(key='signup_form'):
         username = st.text_input("ชื่อผู้ใช้ (Username)", key="signup_username")
         email = st.text_input("อีเมล", key="signup_email")
         password = st.text_input("รหัสผ่าน", type="password", key="signup_password")
         confirm_password = st.text_input("ยืนยันรหัสผ่าน", type="password", key="signup_confirm_password")
-        
+
         signup_button = st.form_submit_button("ลงทะเบียน", use_container_width=True, type="primary")
-        
+
         if signup_button:
             handle_signup(username, email, password, confirm_password)
 
@@ -455,12 +443,11 @@ def display_signup_form():
 def convert_df_to_csv(df):
     """แปลง Pandas DataFrame เป็น CSV สำหรับดาวน์โหลด"""
     df_export = df.copy()
-    
+
     df_export['Date'] = df_export['date'].astype(str)
     df_export['StartTime'] = df_export['start_time'].astype(str)
     df_export['EndTime'] = df_export['end_time'].astype(str)
-    
-    # ดึงเฉพาะคอลัมน์ที่ต้องการ
+
     columns_to_keep = ['room', 'Date', 'StartTime', 'EndTime', 'user_id', 'user_email']
     df_export = df_export[[col for col in columns_to_keep if col in df_export.columns]]
 
@@ -479,9 +466,9 @@ def convert_df_to_csv(df):
 def display_availability_matrix():
     """แสดงตารางสถานะห้องว่างแบบเรียลไทม์"""
     st.subheader("🗓️ Room Status")
-    
+
     view_date = st.date_input(
-        "Choose Date: ", 
+        "Choose Date: ",
         value=datetime.date.today(),
         key="view_date_select"
     )
@@ -494,36 +481,29 @@ def display_availability_matrix():
 
     daily_bookings = []
     for b in current_bookings:
-        try:
-            booking_date = datetime.date.fromisoformat(b.get('date'))
-        except (TypeError, ValueError):
-            continue
-            
+        booking_date = datetime.date.fromisoformat(b.get('date'))
         if booking_date == view_date:
             daily_bookings.append(b)
 
     time_index = []
     start_hour = 8
     end_hour = 17
-    
+
     for h in range(start_hour, end_hour):
         time_index.append(f"{h:02d}:00")
         time_index.append(f"{h:02d}:30")
-    
+
     availability_df = pd.DataFrame(index=time_index, columns=list(ROOMS.keys())).fillna("✅ Available")
-    
+
     for booking in daily_bookings:
         room = booking['room']
-        
-        try:
-            book_start_time = datetime.time.fromisoformat(booking.get('start_time'))
-            book_end_time = datetime.time.fromisoformat(booking.get('end_time'))
-        except (TypeError, ValueError):
-            continue
+
+        book_start_time = datetime.time.fromisoformat(booking.get('start_time'))
+        book_end_time = datetime.time.fromisoformat(booking.get('end_time'))
 
         book_start_dt = datetime.datetime.combine(view_date, book_start_time)
         book_end_dt = datetime.datetime.combine(view_date, book_end_time)
-        
+
         for slot_time_str in time_index:
             slot_time = datetime.datetime.strptime(slot_time_str, "%H:%M").time()
             slot_dt = datetime.datetime.combine(view_date, slot_time)
@@ -539,7 +519,7 @@ def display_availability_matrix():
             return 'background-color: #f8d7da; color: #721c24'
 
     st.dataframe(
-        availability_df.style.applymap(color_cells), 
+        availability_df.style.applymap(color_cells),
         use_container_width=True,
         column_config={
             col: st.column_config.TextColumn(col, width="small")
@@ -554,40 +534,40 @@ def display_booking_form():
 
     current_users = load_users_from_db()
     current_user = st.session_state.authenticated_user
-    current_email = current_users.get(current_user, {}).get('email', 'N/A')
-    
+    current_email = current_users[current_user]['email']
+
     st.info(f"ทำการจองในชื่อ: **{current_user}** ({current_email})")
-    
+
     with st.form(key='booking_form', clear_on_submit=True):
         room_name = st.selectbox(
-            "1. เลือกห้อง", 
+            "1. เลือกห้อง",
             options=list(ROOMS.keys()),
             key="room_select"
         )
 
         booking_date = st.date_input(
-            "2. วันที่", 
+            "2. วันที่",
             value=datetime.date.today(),
             min_value=datetime.date.today(),
             key="date_select"
         )
-            
+
         cols_time = st.columns(2)
         with cols_time[0]:
             start_time = st.time_input(
                 "3. เวลาเริ่มต้น",
                 value=datetime.time(9, 0),
-                step=600, 
+                step=600,
                 key="start_time_input"
             )
         with cols_time[1]:
             end_time = st.time_input(
                 "4. เวลาสิ้นสุด",
                 value=datetime.time(10, 0),
-                step=600, 
+                step=600,
                 key="end_time_input"
             )
-            
+
         st.form_submit_button(
             label='ยืนยันการจอง',
             use_container_width=True,
@@ -599,21 +579,21 @@ def display_booking_form():
 
 def display_data_and_export():
     """แสดงรายการห้องและการจองปัจจุบัน พร้อมปุ่ม export และ Cancel"""
-    
+
     st.subheader("🏢 Room Specifications")
-    
+
     rooms_df = pd.DataFrame([
         {
-            "Room Name": name, 
-            "Capacity": info["capacity"], 
+            "Room Name": name,
+            "Capacity": info["capacity"],
             "Projector": "✅ Yes" if info["has_projector"] else "❌ No"
-        } 
+        }
         for name, info in ROOMS.items()
     ])
     st.dataframe(rooms_df, use_container_width=True, hide_index=True)
 
     st.subheader("📚 Booking List")
-    
+
     current_bookings = load_bookings_from_db()
     current_user = st.session_state.authenticated_user
     current_role = st.session_state.user_role
@@ -623,34 +603,28 @@ def display_data_and_export():
     else:
         bookings_df = pd.DataFrame(current_bookings)
 
-        # 🛑 ส่วนการยกเลิก 
-        if current_user and (current_role == 'admin' or any(b.get('user_id') == current_user for b in current_bookings)):
+        # 🛑 ส่วนการยกเลิก (ใช้ Select Box ที่เสถียรที่สุด)
+        if current_user and (current_role == 'admin' or any(b['user_id'] == current_user for b in current_bookings)):
             st.markdown("---")
             st.markdown("##### 🗑️ ยกเลิกการจอง")
 
             # กรองเฉพาะรายการที่ยกเลิกได้
             cancellable_bookings = [
-                (f"{b.get('date', 'N/A')} {b.get('start_time', 'N/A')} ({b.get('room', 'N/A')} โดย {b.get('user_id', 'N/A')})", b['doc_id'])
+                (f"{b['date']} {b['start_time']} ({b['room']} โดย {b['user_id']})", b['doc_id'])
                 for b in current_bookings
-                if (b.get('user_id') == current_user or current_role == 'admin') and 'doc_id' in b # ต้องมี doc_id เพื่อใช้ลบ
+                if b['user_id'] == current_user or current_role == 'admin'
             ]
-            
+
             if cancellable_bookings:
-                # แก้ไข: ตรวจสอบว่ามีรายการให้เลือกหรือไม่ก่อนทำการ unpack
-                try:
-                    options, doc_ids = zip(*cancellable_bookings)
-                    selected_booking_id_str = st.selectbox("เลือกรายการจองที่ต้องการยกเลิก", options, key="cancel_select")
-                    
-                    if st.button("ยืนยันการยกเลิก", key="cancel_button", type="secondary"):
-                        selected_doc_id = doc_ids[options.index(selected_booking_id_str)]
-                        delete_booking_from_db(selected_doc_id)
-                except ValueError:
-                     st.info("ไม่มีรายการจองที่สามารถยกเลิกได้", icon="🔒")
+                options, doc_ids = zip(*cancellable_bookings)
+                selected_booking_id_str = st.selectbox("เลือกรายการจองที่ต้องการยกเลิก", options, key="cancel_select")
+
+                if st.button("ยืนยันการยกเลิก", key="cancel_button", type="secondary"):
+                    selected_doc_id = doc_ids[options.index(selected_booking_id_str)]
+                    delete_booking_from_db(selected_doc_id)
             else:
                 st.info("คุณไม่มีสิทธิ์ยกเลิกการจองในขณะนี้", icon="🔒")
 
-
-        # ส่วนแสดงผลตาราง
         bookings_df_display = bookings_df.rename(columns={
             'room': 'ห้อง',
             'date': 'วันที่',
@@ -659,10 +633,10 @@ def display_data_and_export():
             'user_id': 'ชื่อผู้ใช้',
             'user_email': 'อีเมล'
         })
-        
+
         st.dataframe(
-            bookings_df_display[['ห้อง', 'วันที่', 'เวลาเริ่มต้น', 'เวลาสิ้นสุด', 'ชื่อผู้ใช้', 'อีเมล']], 
-            use_container_width=True, 
+            bookings_df_display[['ห้อง', 'วันที่', 'เวลาเริ่มต้น', 'เวลาสิ้นสุด', 'ชื่อผู้ใช้', 'อีเมล']],
+            use_container_width=True,
             hide_index=True
         )
 
@@ -692,11 +666,10 @@ def main():
     )
 
     st.title("ISE Meeting Room Scheduler 🏢")
-    st.info("💡 แอปพลิเคชันนี้ใช้ **Cookie Manager** เพื่อคงสถานะล็อกอินไว้แม้รีเฟรชหน้าเว็บ")
-    
+    st.info("💡 แอปพลิเคชันนี้เชื่อมต่อกับฐานข้อมูล Firestore แล้ว หากมีการตั้งค่า Secrets ถูกต้อง ข้อมูลจะถูกบันทึกอย่างถาวร")
+
     initialize_state()
-    
-    # 1. จัดการ Sidebar (ล็อกอิน/โปรไฟล์)
+
     if st.session_state.authenticated_user:
         display_profile_card()
     else:
@@ -708,28 +681,24 @@ def main():
         elif st.session_state.mode == 'signup':
             display_signup_form()
 
-    if st.session_state.db_ready == False:
+    if st.session_state.get('db_ready') is False:
         st.error("⛔ ไม่สามารถใช้งานได้: การเชื่อมต่อฐานข้อมูลล้มเหลว", icon="🚨")
         return
 
-    # 2. แสดงตารางสถานะห้อง
     display_availability_matrix()
     st.markdown("---")
 
     col1, col2 = st.columns([1, 2])
-    
-    # 3. แสดงฟอร์มการจอง (ถ้าล็อกอินแล้ว)
+
     with col1:
         if st.session_state.authenticated_user:
-            display_booking_form() 
+            display_booking_form()
         else:
             st.warning("👉 กรุณาเข้าสู่ระบบ/สมัครสมาชิกที่แถบด้านข้าง (Sidebar) เพื่อเข้าถึงฟอร์มการจอง", icon="👉")
 
-    # 4. แสดงรายการจองและการส่งออกข้อมูล
     with col2:
         display_data_and_export()
 
 
 if __name__ == "__main__":
     main()
-
