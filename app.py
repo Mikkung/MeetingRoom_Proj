@@ -30,7 +30,7 @@ try:
     cookies_manager_installed = True
 except ImportError:
     cookies_manager_installed = False
-    st.error("❌ ไม่พบไลบรารี 'streamlit-cookies-manager' สถานะล็อกอินจะไม่ถูกบันทึกเมื่อรีเฟรช", icon="🚨")
+    st.error("❌ ไม่พบไลบรารี 'streamlit-cookies-manager'", icon="🚨")
 
 
 # 🔑 INITIALIZE COOKIES MANAGER
@@ -732,3 +732,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
