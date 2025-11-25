@@ -3,3 +3,4 @@ pandas
 firebase-admin
 bcrypt
 plotly
+streamlit-cookies-manager
