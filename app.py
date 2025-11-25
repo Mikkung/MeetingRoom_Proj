@@ -5,11 +5,9 @@ import json
 import io
 import time
 
-# ต้องติดตั้ง: pip install firebase-admin bcrypt streamlit-cookies-manager
-
 # --- LIBRARIES AND CONFIGURATION ---
 
-# 🛑 bcrypt for secure password hashing
+# 🛑 นำเข้า bcrypt สำหรับการเข้ารหัสรหัสผ่าน
 try:
     import bcrypt
     bcrypt_installed = True
@@ -17,7 +15,7 @@ except ImportError:
     bcrypt_installed = False
     st.warning("⚠️ ไม่พบไลบรารี 'bcrypt' การตรวจสอบรหัสผ่าน/Sign Up จะทำงานใน Mock Mode", icon="🚨")
 
-# 🛑 Firebase for Firestore connection
+# 🛑 นำเข้าไลบรารี Firebase
 try:
     from firebase_admin import credentials, firestore, initialize_app, get_app
     from firebase_admin.exceptions import InvalidArgumentError
@@ -26,7 +24,7 @@ except ImportError:
     firebase_installed = False
     st.error("❌ ไม่พบไลบรารี 'firebase-admin' กรุณาติดตั้งเพื่อเชื่อมต่อ Firestore", icon="🚨")
 
-# 🛑 Streamlit Cookies Manager for persistence (NEW)
+# 🛑 นำเข้า Streamlit Cookies Manager สำหรับการคงสถานะ (NEW)
 try:
     from streamlit_cookies_manager import EncryptedCookieManager
     cookies_manager_installed = True
@@ -40,7 +38,7 @@ COOKIES = None
 if cookies_manager_installed:
     try:
         # ใช้คีย์จาก st.secrets เพื่อเข้ารหัสคุกกี้
-        cookie_key = st.secrets.get("cookie_key", "fallback_secret_key_if_not_set_please_set_it")
+        cookie_key = st.secrets.get("cookie_key", "fallback_secret_key_if_not_set_please_set_it_123456")
         COOKIES = EncryptedCookieManager(
             prefix="ise_sch_",
             password=cookie_key,
@@ -87,8 +85,10 @@ def init_database_connection():
             
         try:
             try:
+                # ตรวจสอบว่ามีการ Initialize ไปแล้วหรือไม่
                 get_app()
             except ValueError:
+                # อ่าน Credentials จาก st.secrets
                 key_dict = json.loads(st.secrets["firestore_credentials"])
                 cred = credentials.Certificate(key_dict)
                 initialize_app(cred)
@@ -117,24 +117,24 @@ def initialize_state():
         st.session_state.rooms = ROOMS
         
     # **ส่วนที่แก้ไขเพื่อให้สถานะคงอยู่ (Persistence Logic)**
-    if 'authenticated_user' not in st.session_state:
-        # 1. พยายามโหลดจากคุกกี้ (ถ้ามี)
+    # 1. โหลดสถานะล็อกอินจาก Session State ก่อน
+    if 'authenticated_user' not in st.session_state or st.session_state.authenticated_user is None:
+        # 2. หากไม่มีใน Session State ให้พยายามโหลดจากคุกกี้
         cookie_user = COOKIES.get('user_id') if COOKIES else None
-        st.session_state.authenticated_user = cookie_user if cookie_user else None
-        
-    if 'user_role' not in st.session_state:
-        # 2. พยายามโหลดบทบาทจากคุกกี้ (ถ้ามี)
-        cookie_role = COOKIES.get('user_role') if COOKIES else None
-        st.session_state.user_role = cookie_role if cookie_role else None
+        if cookie_user:
+            st.session_state.authenticated_user = cookie_user
+            st.session_state.user_role = COOKIES.get('user_role')
         
     if 'mode' not in st.session_state:
         # กำหนดโหมดตามสถานะการล็อกอิน
         st.session_state.mode = 'login' if st.session_state.authenticated_user is None else 'app'
+    elif st.session_state.mode == 'login' and st.session_state.authenticated_user is not None:
+        # หากล็อกอินสำเร็จจากคุกกี้ ให้เปลี่ยนโหมดเป็น 'app'
+         st.session_state.mode = 'app'
 
+# --- DATABASE OPERATIONS ---
 
-# --- DATABASE OPERATIONS (ไม่มีการเปลี่ยนแปลงหลัก) ---
-
-@st.cache_data(ttl=3600) # Cache User List for 1 hour
+@st.cache_data(ttl=3600) 
 def load_users_from_db():
     """โหลดข้อมูลผู้ใช้ทั้งหมดจาก Collection 'users' ใน Firestore"""
     if not st.session_state.db_ready:
@@ -142,6 +142,7 @@ def load_users_from_db():
 
     try:
         users = {}
+        # ตรวจสอบว่า collection 'users' มีอยู่จริง
         docs = st.session_state.db.collection("users").stream()
         for doc in docs:
             user_data = doc.to_dict()
@@ -198,6 +199,7 @@ def delete_booking_from_db(doc_id):
     if not st.session_state.db_ready:
         return False
     
+    # โค้ดส่วนนี้ช่วยป้องกันปัญหา Doc ID ที่มาจาก SelectBox
     if doc_id.startswith("Cancel-"):
         actual_doc_id = doc_id.split("-", 1)[1]
     else:
@@ -232,7 +234,7 @@ def save_new_user_to_db(username, email, hashed_password):
         return False
 
 
-# --- CORE LOGIC & CALLBACKS (ไม่มีการเปลี่ยนแปลงหลัก) ---
+# --- CORE LOGIC & CALLBACKS ---
 
 def is_conflict(new_booking, current_bookings):
     """ตรวจสอบความขัดแย้งของการจอง"""
@@ -242,6 +244,7 @@ def is_conflict(new_booking, current_bookings):
     new_end_obj = new_booking['end_time_obj']
 
     for booking in current_bookings:
+        # ป้องกัน error หากข้อมูลใน DB ไม่สมบูรณ์
         try:
             booking_date = datetime.date.fromisoformat(booking.get('date'))
             existing_start = datetime.time.fromisoformat(booking.get('start_time'))
@@ -313,11 +316,13 @@ def handle_signup(username, email, password, confirm_password):
 
     if bcrypt_installed:
         try:
+            # ใช้ bcrypt ในการเข้ารหัสรหัสผ่าน
             hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt(12)).decode('utf-8')
         except Exception:
             st.toast("❌ ข้อผิดพลาดในการเข้ารหัสรหัสผ่าน (bcrypt)", icon="🚨")
             return
     else:
+        # Mock Mode
         hashed_password = "MOCK_HASH_FOR_" + username
         if password != "signup":
             st.toast("⚠️ Mock Mode: ต้องใช้รหัสผ่าน 'signup' ในโหมดนี้เพื่อลงทะเบียน", icon="⚠️")
@@ -382,17 +387,18 @@ def display_login_form():
                     try:
                         stored_hash_bytes = stored_hash_str.encode('utf-8')
                         password_bytes = password.encode('utf-8')
+                        # ตรวจสอบรหัสผ่านด้วย bcrypt
                         if bcrypt.checkpw(password_bytes, stored_hash_bytes):
                             is_correct = True
                     except Exception:
                         st.toast("❌ Hash Key ไม่สมบูรณ์ กรุณาตรวจสอบ Firestore Console", icon="🛠️")
                         return
                 else:
-                    # Mock Mode fallback login check
+                    # Mock Mode fallback login check (ใช้สำหรับทดสอบหากไม่มี bcrypt/DB)
                     if username == "admin.user" and password == 'p789':
-                        is_correct = True
+                         is_correct = True
                     elif stored_hash_str == "MOCK_HASH_FOR_" + username:
-                        is_correct = True
+                         is_correct = True
 
                 if is_correct:
                     st.session_state.authenticated_user = username
@@ -438,7 +444,7 @@ def display_signup_form():
         st.rerun()
 
 
-# --- Display Helpers (ไม่มีการเปลี่ยนแปลงหลัก) ---
+# --- Display Helpers ---
 
 def convert_df_to_csv(df):
     """แปลง Pandas DataFrame เป็น CSV สำหรับดาวน์โหลด"""
@@ -448,6 +454,7 @@ def convert_df_to_csv(df):
     df_export['StartTime'] = df_export['start_time'].astype(str)
     df_export['EndTime'] = df_export['end_time'].astype(str)
     
+    # ดึงเฉพาะคอลัมน์ที่ต้องการ
     columns_to_keep = ['room', 'Date', 'StartTime', 'EndTime', 'user_id', 'user_email']
     df_export = df_export[[col for col in columns_to_keep if col in df_export.columns]]
 
@@ -541,7 +548,7 @@ def display_booking_form():
 
     current_users = load_users_from_db()
     current_user = st.session_state.authenticated_user
-    current_email = current_users[current_user]['email']
+    current_email = current_users.get(current_user, {}).get('email', 'N/A')
     
     st.info(f"ทำการจองในชื่อ: **{current_user}** ({current_email})")
     
@@ -610,7 +617,7 @@ def display_data_and_export():
     else:
         bookings_df = pd.DataFrame(current_bookings)
 
-        # 🛑 ส่วนการยกเลิก
+        # 🛑 ส่วนการยกเลิก 
         if current_user and (current_role == 'admin' or any(b.get('user_id') == current_user for b in current_bookings)):
             st.markdown("---")
             st.markdown("##### 🗑️ ยกเลิกการจอง")
@@ -619,20 +626,25 @@ def display_data_and_export():
             cancellable_bookings = [
                 (f"{b.get('date', 'N/A')} {b.get('start_time', 'N/A')} ({b.get('room', 'N/A')} โดย {b.get('user_id', 'N/A')})", b['doc_id'])
                 for b in current_bookings
-                if b.get('user_id') == current_user or current_role == 'admin'
+                if (b.get('user_id') == current_user or current_role == 'admin') and 'doc_id' in b # ต้องมี doc_id เพื่อใช้ลบ
             ]
             
             if cancellable_bookings:
-                options, doc_ids = zip(*cancellable_bookings)
-                selected_booking_id_str = st.selectbox("เลือกรายการจองที่ต้องการยกเลิก", options, key="cancel_select")
-                
-                if st.button("ยืนยันการยกเลิก", key="cancel_button", type="secondary"):
-                    selected_doc_id = doc_ids[options.index(selected_booking_id_str)]
-                    delete_booking_from_db(selected_doc_id)
+                # แก้ไข: ตรวจสอบว่ามีรายการให้เลือกหรือไม่ก่อนทำการ unpack
+                try:
+                    options, doc_ids = zip(*cancellable_bookings)
+                    selected_booking_id_str = st.selectbox("เลือกรายการจองที่ต้องการยกเลิก", options, key="cancel_select")
+                    
+                    if st.button("ยืนยันการยกเลิก", key="cancel_button", type="secondary"):
+                        selected_doc_id = doc_ids[options.index(selected_booking_id_str)]
+                        delete_booking_from_db(selected_doc_id)
+                except ValueError:
+                     st.info("ไม่มีรายการจองที่สามารถยกเลิกได้", icon="🔒")
             else:
                 st.info("คุณไม่มีสิทธิ์ยกเลิกการจองในขณะนี้", icon="🔒")
 
 
+        # ส่วนแสดงผลตาราง
         bookings_df_display = bookings_df.rename(columns={
             'room': 'ห้อง',
             'date': 'วันที่',
@@ -674,10 +686,11 @@ def main():
     )
 
     st.title("ISE Meeting Room Scheduler 🏢")
-    st.info("💡 แอปพลิเคชันนี้เชื่อมต่อกับฐานข้อมูล Firestore แล้ว หากมีการตั้งค่า Secrets ถูกต้อง และใช้ Cookie Manager เพื่อคงสถานะล็อกอิน")
+    st.info("💡 แอปพลิเคชันนี้ใช้ **Cookie Manager** เพื่อคงสถานะล็อกอินไว้แม้รีเฟรชหน้าเว็บ")
     
     initialize_state()
     
+    # 1. จัดการ Sidebar (ล็อกอิน/โปรไฟล์)
     if st.session_state.authenticated_user:
         display_profile_card()
     else:
@@ -693,17 +706,20 @@ def main():
         st.error("⛔ ไม่สามารถใช้งานได้: การเชื่อมต่อฐานข้อมูลล้มเหลว", icon="🚨")
         return
 
+    # 2. แสดงตารางสถานะห้อง
     display_availability_matrix()
     st.markdown("---")
 
     col1, col2 = st.columns([1, 2])
     
+    # 3. แสดงฟอร์มการจอง (ถ้าล็อกอินแล้ว)
     with col1:
         if st.session_state.authenticated_user:
             display_booking_form() 
         else:
             st.warning("👉 กรุณาเข้าสู่ระบบ/สมัครสมาชิกที่แถบด้านข้าง (Sidebar) เพื่อเข้าถึงฟอร์มการจอง", icon="👉")
 
+    # 4. แสดงรายการจองและการส่งออกข้อมูล
     with col2:
         display_data_and_export()
 
