@@ -3,18 +3,17 @@ import datetime
 import pandas as pd
 import json
 import io
-# ต้องติดตั้ง: pip install firebase-admin bcrypt
+import time # นำเข้าสำหรับ time.sleep (สำหรับ mock mode)
 
-# 🛑 ต้องใช้ try-except เนื่องจาก Streamlit Cloud อาจไม่ให้ติดตั้ง bcrypt ได้ง่ายๆ
+# --- INITIALIZATION AND DB CONNECTION ---
+# ต้องติดตั้ง: pip install firebase-admin bcrypt
 try:
     import bcrypt
     bcrypt_installed = True
 except ImportError:
     bcrypt_installed = False
-    st.warning("⚠️ ไม่พบไลบรารี 'bcrypt' การตรวจสอบรหัสผ่าน/Sign Up จะทำงานใน Mock Mode", icon="🚨")
+    st.warning("⚠️ ไม่พบไลบรารี 'bcrypt' การตรวจสอบรหัสผ่านจะใช้ Mock Logic แทน", icon="🚨")
 
-
-# 🛑 นำเข้าไลบรารี Firebase
 try:
     from firebase_admin import credentials, firestore, initialize_app, get_app
     from firebase_admin.exceptions import InvalidArgumentError
@@ -27,7 +26,6 @@ except ImportError:
 
 # --- CONFIGURATION & UTILITIES ---
 
-# 1. Mock User Database (ใช้ Hash ที่คุณสร้างและจะอัปเดต)
 MOCK_USER_FALLBACK = {
     "admin.user": {
         "email": "admin@ise.com",
@@ -36,25 +34,11 @@ MOCK_USER_FALLBACK = {
     }
 }
 
-# 2. Room Configuration
 ROOMS = {
     "ISE_Meeting_Room_I_305_Fl1": {"capacity": 8, "has_projector": True},
     "ISE_Meeting_Room_II_Fl2": {"capacity": 20, "has_projector": True},
     "ISE_Meeting_Room_III_304/1_Fl1": {"capacity": 20, "has_projector": True}
 }
-
-# 3. Time Slot Configuration 
-TOTAL_MINUTES = 9 * 60 
-START_HOUR = 8
-
-def minutes_to_time(minutes):
-    """แปลงนาทีตั้งแต่ 8:00 เป็นวัตถุ datetime.time"""
-    total_minutes = START_HOUR * 60 + minutes
-    hour = total_minutes // 60
-    minute = total_minutes % 60
-    return datetime.time(hour, minute)
-
-# --- INITIALIZATION AND DB CONNECTION ---
 
 def init_database_connection():
     """เชื่อมต่อกับ Firestore และป้องกันการเริ่มต้นซ้ำ"""
@@ -73,7 +57,6 @@ def init_database_connection():
             
             st.session_state.db = firestore.client()
             st.session_state.db_ready = True
-            st.session_state.mode = 'login' 
             st.sidebar.success("✅ เชื่อมต่อ Firestore สำเร็จ", icon="🌐")
             
         except Exception as e:
@@ -84,7 +67,7 @@ def init_database_connection():
 
 def initialize_state():
     """เริ่มต้นตัวแปร Session State และโหลดข้อมูล"""
-    init_database_connection() # เชื่อมต่อ DB
+    init_database_connection()
     
     if 'rooms' not in st.session_state:
         st.session_state.rooms = ROOMS
@@ -94,7 +77,6 @@ def initialize_state():
         st.session_state.user_role = None
     if 'mode' not in st.session_state:
         st.session_state.mode = 'login'
-
 
 # --- DATABASE OPERATIONS ---
 
@@ -186,10 +168,10 @@ def save_new_user_to_db(username, email, hashed_password):
         user_data = {
             "email": email,
             "hashed_password": hashed_password,
-            "role": "user" # กำหนดบทบาทเริ่มต้นเป็น user
+            "role": "user"
         }
         st.session_state.db.collection("users").document(username).set(user_data)
-        load_users_from_db.clear() # Clear user cache
+        load_users_from_db.clear() 
         return True
     except Exception as e:
         st.error(f"❌ ข้อผิดพลาดในการบันทึกผู้ใช้ใหม่: {e}", icon="🚨")
@@ -198,8 +180,19 @@ def save_new_user_to_db(username, email, hashed_password):
 
 # --- CORE LOGIC & CALLBACKS ---
 
+def is_time_overlap(start1, end1, start2, end2):
+    """ตรวจสอบว่าช่วงเวลาสองช่วงทับซ้อนกันหรือไม่ (ใช้ datetime.time objects)"""
+    def time_to_seconds(t):
+        if t is None: return -1 
+        return t.hour * 3600 + t.minute * 60 + t.second
+    
+    s1, e1 = time_to_seconds(start1), time_to_seconds(end1)
+    s2, e2 = time_to_seconds(start2), time_to_seconds(end2)
+    
+    return not (e1 <= s2 or s1 >= e2)
+
 def is_conflict(new_booking, current_bookings):
-    """ตรวจสอบความขัดแย้งของการจอง"""
+    """ตรวจสอบว่าการจองใหม่ขัดแย้งกับการจองที่มีอยู่หรือไม่ โดยใช้ข้อมูลที่โหลดจาก DB"""
     new_room = new_booking['room']
     new_date_obj = new_booking['date_obj']
     new_start_obj = new_booking['start_time_obj']
@@ -214,16 +207,9 @@ def is_conflict(new_booking, current_bookings):
             continue
 
         if booking['room'] == new_room and booking_date == new_date_obj:
-            def time_to_seconds(t):
-                return t.hour * 3600 + t.minute * 60 + t.second
-            
-            s_new, e_new = time_to_seconds(new_start_obj), time_to_seconds(new_end_obj)
-            s_exist, e_exist = time_to_seconds(existing_start), time_to_seconds(existing_end)
-
-            if not (e_new <= s_exist or s_new >= e_exist):
+            if is_time_overlap(new_start_obj, new_end_obj, existing_start, existing_end):
                 return True
     return False
-
 
 def handle_booking_submission(room_name, booking_date, start_time, end_time):
     """ประมวลผลข้อมูลฟอร์มและพยายามสร้างการจองใหม่"""
@@ -258,7 +244,6 @@ def handle_booking_submission(room_name, booking_date, start_time, end_time):
     else:
         if save_booking_to_db(new_booking):
             st.toast("✅ การจองสำเร็จ! ห้องของคุณถูกบันทึกแล้ว", icon="🎉")
-
 
 def handle_signup(username, email, password, confirm_password):
     """จัดการการลงทะเบียนผู้ใช้ใหม่"""
@@ -296,6 +281,16 @@ def handle_signup(username, email, password, confirm_password):
         st.toast("❌ บันทึกผู้ใช้ใหม่ไม่สำเร็จ", icon="🚨")
 
 
+def check_query_params_for_auth(current_users):
+    """ตรวจสอบ URL Query Params เพื่อคงสถานะล็อกอินไว้เมื่อมีการ Refresh"""
+    if st.session_state.authenticated_user is None and st.query_params:
+        user_id_from_url = st.query_params.get('user')
+        if user_id_from_url and user_id_from_url in current_users:
+            st.session_state.authenticated_user = user_id_from_url
+            st.session_state.user_role = current_users[user_id_from_url]['role']
+            # ไม่ต้อง reran เพราะเป็นการโหลดสถานะเริ่มต้น
+
+
 # --- UI COMPONENTS ---
 
 def display_profile_card():
@@ -313,9 +308,10 @@ def display_profile_card():
     st.sidebar.button("ออกจากระบบ", key="logout_btn", on_click=lambda: (
         setattr(st.session_state, 'authenticated_user', None),
         setattr(st.session_state, 'user_role', None),
+        setattr(st.session_state, 'mode', 'login'),
+        st.query_params.clear(), # ลบ user ออกจาก URL
         load_bookings_from_db.clear(),
-        load_users_from_db.clear(),
-        setattr(st.session_state, 'mode', 'login')
+        load_users_from_db.clear()
     ), use_container_width=True)
 
 
@@ -354,6 +350,8 @@ def display_login_form():
                     st.session_state.authenticated_user = username
                     st.session_state.user_role = current_users[username]['role'] 
                     st.toast(f"ยินดีต้อนรับ, {username}!", icon="👋")
+                    # 🛑 บันทึกสถานะการล็อกอินลงใน URL
+                    st.query_params['user'] = username 
                     st.rerun()
                 else:
                     st.toast("⛔ ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง", icon="⛔")
@@ -385,31 +383,6 @@ def display_signup_form():
     if st.sidebar.button("กลับสู่หน้าเข้าสู่ระบบ", key="login_toggle"):
         st.session_state.mode = 'login'
         st.rerun()
-
-
-# --- Display Helpers ---
-
-def convert_df_to_csv(df):
-    """แปลง Pandas DataFrame เป็น CSV สำหรับดาวน์โหลด"""
-    df_export = df.copy()
-    
-    df_export['Date'] = df_export['date'].astype(str)
-    df_export['StartTime'] = df_export['start_time'].astype(str)
-    df_export['EndTime'] = df_export['end_time'].astype(str)
-    
-    columns_to_keep = ['room', 'Date', 'StartTime', 'EndTime', 'user_id', 'user_email']
-    df_export = df_export[[col for col in columns_to_keep if col in df_export.columns]]
-
-    df_export = df_export.rename(columns={
-        'room': 'Room',
-        'user_id': 'Username',
-        'user_email': 'Email'
-    })
-
-    output = io.StringIO()
-    df_export.to_csv(output, index=False, encoding='utf-8')
-    processed_data = output.getvalue().encode('utf-8')
-    return processed_data
 
 
 def display_availability_matrix():
@@ -557,7 +530,6 @@ def display_data_and_export():
             st.markdown("---")
             st.markdown("##### 🗑️ ยกเลิกการจอง")
 
-            # กรองเฉพาะรายการที่ยกเลิกได้
             cancellable_bookings = [
                 (f"{b['date']} {b['start_time']} ({b['room']} โดย {b['user_id']})", b['doc_id'])
                 for b in current_bookings
@@ -603,7 +575,6 @@ def display_data_and_export():
         elif current_user:
             st.info("คุณต้องเป็นผู้ดูแลระบบ (Admin) เท่านั้น จึงจะสามารถส่งออกข้อมูลสถิติการจองทั้งหมดได้")
 
-
 # --- MAIN APPLICATION ENTRY POINT ---
 
 def main():
@@ -616,21 +587,26 @@ def main():
     )
 
     st.title("ISE Meeting Room Scheduler 🏢")
-    st.info("💡 แอปพลิเคชันนี้เชื่อมต่อกับฐานข้อมูล Firestore แล้ว หากมีการตั้งค่า Secrets ถูกต้อง ข้อมูลจะถูกบันทึกอย่างถาวร")
+    st.info("💡 แอปพลิเคชันนี้เชื่อมต่อกับฐานข้อมูล Firestore และจดจำสถานะล็อกอินผ่าน URL")
     
     initialize_state()
+    current_users = load_users_from_db()
+
+    # 🛑 ตรวจสอบสถานะล็อกอินจาก URL (เพื่อแก้ปัญหา Refresh)
+    check_query_params_for_auth(current_users)
     
-    if st.session_state.authenticated_user:
+    is_authenticated = st.session_state.authenticated_user is not None
+
+    # 1. SIDEBAR (Auth/Profile)
+    if is_authenticated:
         display_profile_card()
     else:
-        if 'mode' not in st.session_state:
-             st.session_state.mode = 'login'
-
         if st.session_state.mode == 'login':
             display_login_form()
         elif st.session_state.mode == 'signup':
             display_signup_form()
 
+    # 2. MAIN CONTENT (Matrix)
     if st.session_state.db_ready == False:
         st.error("⛔ ไม่สามารถใช้งานได้: การเชื่อมต่อฐานข้อมูลล้มเหลว", icon="🚨")
         return
@@ -641,17 +617,15 @@ def main():
     col1, col2 = st.columns([1, 2])
     
     with col1:
-        if st.session_state.authenticated_user:
+        if is_authenticated:
             display_booking_form() 
         else:
             st.warning("👉 กรุณาเข้าสู่ระบบ/สมัครสมาชิกที่แถบด้านข้าง (Sidebar) เพื่อเข้าถึงฟอร์มการจอง", icon="👉")
 
     with col2:
-        display_data_and_export()
+        if is_authenticated:
+            display_data_and_export()
 
 
 if __name__ == "__main__":
     main()
-
-
-
